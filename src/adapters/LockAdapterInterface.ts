@@ -16,4 +16,14 @@ export interface ILockAdapter {
     key: string;
     uniqueValue: string;
   }) => Promise<void>;
+
+  extendLock: ({
+    key,
+    uniqueValue,
+    ttl,
+  }: {
+    key: string;
+    uniqueValue: string;
+    ttl: number;
+  }) => Promise<void>;
 }

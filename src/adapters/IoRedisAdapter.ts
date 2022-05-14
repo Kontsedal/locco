@@ -1,9 +1,14 @@
 import Redis from "ioredis";
-import { LockCreateError, LockReleaseError } from "../errors";
+import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
 
 type EnhancedRedis = Redis & {
   releaseLock: (key: string, uniqueValue: string) => Promise<number>;
+  extendLock: (
+    key: string,
+    uniqueValue: string,
+    ttl: number
+  ) => Promise<"OK" | null>;
 };
 
 export class IoRedisAdapter implements ILockAdapter {
@@ -33,7 +38,7 @@ export class IoRedisAdapter implements ILockAdapter {
     key: string;
     uniqueValue: string;
   }) {
-    const releaseScript = `
+    const script = `
       if redis.call("get",KEYS[1]) == ARGV[1] then
         return redis.call("del",KEYS[1])
       else
@@ -42,7 +47,7 @@ export class IoRedisAdapter implements ILockAdapter {
     `;
     this.client.defineCommand("releaseLock", {
       numberOfKeys: 1,
-      lua: releaseScript,
+      lua: script,
     });
     const result = await (this.client as EnhancedRedis).releaseLock(
       key,
@@ -52,5 +57,36 @@ export class IoRedisAdapter implements ILockAdapter {
       return;
     }
     throw new LockReleaseError();
+  }
+
+  async extendLock({
+    key,
+    uniqueValue,
+    ttl,
+  }: {
+    key: string;
+    uniqueValue: string;
+    ttl: number;
+  }) {
+    const script = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("set", KEYS[1], ARGV[1], "PX", ARGV[2])
+      else
+        return nil
+      end
+    `;
+    this.client.defineCommand("extendLock", {
+      numberOfKeys: 1,
+      lua: script,
+    });
+    const result = await (this.client as EnhancedRedis).extendLock(
+      key,
+      uniqueValue,
+      ttl
+    );
+    if (result === "OK") {
+      return;
+    }
+    throw new LockExtendError();
   }
 }

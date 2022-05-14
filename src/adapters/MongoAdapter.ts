@@ -1,6 +1,8 @@
 import { Collection, MongoClient } from "mongodb";
-import { LockCreateError, LockReleaseError } from "../errors";
+import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
+
+const MONGO_DUPLICATE_ERROR_CODE = 11000;
 
 export class MongoAdapter implements ILockAdapter {
   private client: MongoClient;
@@ -53,8 +55,7 @@ export class MongoAdapter implements ILockAdapter {
         { upsert: true }
       );
     } catch (error) {
-      const DUPLICATE_ERROR_CODE = 11000;
-      if (error.code === DUPLICATE_ERROR_CODE) {
+      if (error.code === MONGO_DUPLICATE_ERROR_CODE) {
         throw new LockCreateError();
       }
       throw error;
@@ -75,6 +76,34 @@ export class MongoAdapter implements ILockAdapter {
     });
     if (result.deletedCount === 0) {
       throw new LockReleaseError();
+    }
+  }
+
+  async extendLock({
+    key,
+    uniqueValue,
+    ttl,
+  }: {
+    key: string;
+    uniqueValue: string;
+    ttl: number;
+  }) {
+    await this.createIndexes();
+    try {
+      await this.collection.updateOne(
+        {
+          key,
+          uniqueValue,
+          expireAt: { $gt: new Date() },
+        },
+        { $set: { key, uniqueValue, expireAt: new Date(Date.now() + ttl) } },
+        { upsert: true }
+      );
+    } catch (error) {
+      if (error.code === MONGO_DUPLICATE_ERROR_CODE) {
+        throw new LockExtendError();
+      }
+      throw error;
     }
   }
 }
