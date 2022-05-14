@@ -26,3 +26,9 @@ export class LockExtendError extends CustomError {
     super(description, "LockExtendError");
   }
 }
+
+export class RetryError extends CustomError {
+  constructor(description = "") {
+    super(description, "RetryError");
+  }
+}
