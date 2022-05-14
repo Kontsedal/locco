@@ -32,7 +32,8 @@ export class InMemoryAdapter implements ILockAdapter {
     uniqueValue: string;
   }) {
     const entry = this.storage.get(key);
-    if (entry && entry.expireAt > Date.now()) {
+    const now = Date.now();
+    if (!entry || entry.expireAt < now) {
       throw new LockReleaseError("Lock is already expired");
     }
     if (entry && entry.uniqueValue !== uniqueValue) {
