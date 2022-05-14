@@ -1,12 +1,19 @@
 {
-  "name": "locco",
+  "name": "@kontsedal/locco",
   "version": "0.0.1-beta.1",
+  "keywords": ["lock", "redlock", "mongo", "redis"],
+  "license" : "MIT",
+  "author": "Bohdan Kontsedal <kontsedalbohdan@gmail.com>",
   "description": "Distributed locks library",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "/dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kontsedal/locco.git"
+  },
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc -w",
@@ -21,9 +28,9 @@
     "eslint-plugin-prettier": "^4.0.0",
     "ioredis": "^5.0.4",
     "prettier": "^2.6.2",
-    "typescript": "4.6.4"
+    "typescript": "4.6.4",
+    "mongodb": "^4.6.0"
   },
   "dependencies": {
-    "mongodb": "^4.6.0"
   }
 }
