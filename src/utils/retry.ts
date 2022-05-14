@@ -1,5 +1,5 @@
-import { RetryError } from "./errors";
-import { wait } from "./utils/wait";
+import { RetryError } from "../errors";
+import { wait } from "./wait";
 
 export type RetrySettings = {
   retryTimes: number;
