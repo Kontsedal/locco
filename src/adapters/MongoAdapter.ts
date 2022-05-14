@@ -7,7 +7,7 @@ const MONGO_DUPLICATE_ERROR_CODE = 11000;
 export class MongoAdapter implements ILockAdapter {
   private client: MongoClient;
   private collection: Collection;
-  private initialized: boolean;
+  private indexesCreated: boolean;
 
   constructor({
     client,
@@ -23,7 +23,7 @@ export class MongoAdapter implements ILockAdapter {
   }
 
   private async createIndexes() {
-    if (this.initialized) {
+    if (this.indexesCreated) {
       return;
     }
     await Promise.all([
@@ -33,6 +33,7 @@ export class MongoAdapter implements ILockAdapter {
         { background: true }
       ),
     ]);
+    this.indexesCreated = true;
   }
 
   async createLock({
