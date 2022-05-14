@@ -1,6 +1,6 @@
 {
   "name": "locco",
-  "version": "0.0.1",
+  "version": "0.0.1-beta.1",
   "description": "Distributed locks library",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
