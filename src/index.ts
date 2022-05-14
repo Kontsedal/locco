@@ -76,15 +76,21 @@ export class Lock {
     return this;
   }
 
-  async release() {
+  async release(throwError = false) {
     if (this.released) {
       throw new Error("Locco:::Lock:::release Can't release resource twice");
     }
-    await this.adapter.releaseLock({
-      key: this.key,
-      uniqueValue: this.uniqueValue,
-    });
-    this.released = true;
+    try {
+      await this.adapter.releaseLock({
+        key: this.key,
+        uniqueValue: this.uniqueValue,
+      });
+      this.released = true;
+    } catch (error) {
+      if (throwError) {
+        throw error;
+      }
+    }
   }
 
   async extend(ttl) {

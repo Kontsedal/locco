@@ -1,4 +1,4 @@
-export class CustomError extends Error {
+class CustomError extends Error {
   public name: string;
 
   constructor(description: string, name = "ERROR") {
