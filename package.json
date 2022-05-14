@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc -w",
-    "test": "jest"
+    "test": "jest",
+    "lint": "eslint src --ext .ts"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^5.23.0",
