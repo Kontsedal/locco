@@ -12,13 +12,13 @@ export class Locco {
     retrySettings,
   }: {
     adapter: ILockAdapter;
-    retrySettings: RetrySettings;
+    retrySettings?: RetrySettings;
   }) {
     if (!adapter) {
       throw new Error("Locco:::constructor Adapter is required");
     }
     this.adapter = adapter;
-    this.retrySettings = retrySettings;
+    this.retrySettings = { retryDelay: 300, retryTimes: 10, ...retrySettings };
   }
 
   lock(key: string, ttl: number) {
