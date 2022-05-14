@@ -20,7 +20,7 @@ export class MongoAdapter implements ILockAdapter {
     this.collection = client.db(dbName).collection(locksCollectionName);
   }
 
-  private async initialize() {
+  private async createIndexes() {
     if (this.initialized) {
       return;
     }
@@ -42,7 +42,7 @@ export class MongoAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
-    await this.initialize();
+    await this.createIndexes();
     try {
       await this.collection.updateOne(
         {
@@ -68,6 +68,7 @@ export class MongoAdapter implements ILockAdapter {
     key: string;
     uniqueValue: string;
   }) {
+    await this.createIndexes();
     const result = await this.collection.deleteOne({
       key,
       uniqueValue,
