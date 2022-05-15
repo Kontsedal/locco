@@ -2,7 +2,7 @@ import { ILockAdapter } from "./adapters";
 import { retry, RetrySettings } from "./utils/retry";
 import { getRandomHash } from "./utils/getRandomHash";
 import { LoccoError, LockCreateError } from "./errors";
-import * as validators from "./validators";
+import * as validators from "./utils/validators";
 
 export class Lock {
   private adapter: ILockAdapter;

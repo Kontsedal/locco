@@ -1,7 +1,7 @@
 import Redis from "ioredis";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
-import * as validators from "../validators";
+import * as validators from "../utils/validators";
 
 type EnhancedRedis = Redis & {
   releaseLock: (key: string, uniqueValue: string) => Promise<number>;

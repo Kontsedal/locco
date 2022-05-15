@@ -1,7 +1,7 @@
 import { Collection, MongoClient } from "mongodb";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
-import * as validators from "../validators";
+import * as validators from "../utils/validators";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;
 

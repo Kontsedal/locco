@@ -1,6 +1,6 @@
 import { RetryError } from "../errors";
 import { wait } from "./wait";
-import * as validators from "../validators";
+import * as validators from "./validators";
 
 export type RetrySettings = {
   retryTimes?: number;

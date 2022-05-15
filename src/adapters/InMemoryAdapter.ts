@@ -1,6 +1,6 @@
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
-import * as validators from "../validators";
+import * as validators from "../utils/validators";
 
 type LockEntry = {
   expireAt: number;

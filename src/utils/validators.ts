@@ -1,5 +1,5 @@
-import { ValidationError } from "./errors";
-import { RetrySettings } from "./utils/retry";
+import { ValidationError } from "../errors";
+import { RetrySettings } from "./retry";
 
 export function isPositiveInteger(value: unknown) {
   return typeof value === "number" && Math.floor(value) === value;

@@ -1,7 +1,7 @@
 import { ILockAdapter } from "./adapters";
 import { RetrySettings } from "./utils/retry";
 import { Lock } from "./Lock";
-import * as validators from "./validators";
+import * as validators from "./utils/validators";
 import { ValidationError } from "./errors";
 
 export class Locco {
