@@ -1,12 +1,16 @@
 import { RetryError } from "../errors";
 import { wait } from "./wait";
+import * as validators from "../validators";
 
 export type RetrySettings = {
-  retryTimes: number;
+  retryTimes?: number;
   retryDelay?: number;
   retryDelayFn?: (params: {
     attemptNumber: number;
     startedAt: number;
+    previousDelay: number;
+    settings: RetrySettings;
+    stop: () => void;
   }) => number | Promise<number>;
   totalTime?: number;
 };
@@ -20,12 +24,11 @@ export const retry = ({
   fn: () => Promise<void>;
   shouldProceedFn: (err: any) => boolean;
 }) => {
+  validators.validateRetrySettings(settings);
   let attemptNumber = -1;
-  let startedAt;
-  const tick = async () => {
-    if (attemptNumber === -1) {
-      startedAt = Date.now();
-    }
+  let startedAt = Date.now();
+  let stopped = false;
+  const tick = async (previousDelay = 0) => {
     if (settings.totalTime && Date.now() - startedAt >= settings.totalTime) {
       throw new RetryError("Total time exceeded");
     }
@@ -37,7 +40,10 @@ export const retry = ({
       if (!shouldProceed) {
         throw error;
       }
-      if (settings.retryTimes <= attemptNumber + 1) {
+      if (
+        !validators.isUndefined(settings.retryTimes) &&
+        settings.retryTimes <= attemptNumber + 1
+      ) {
         throw new RetryError("Reached retry times limit");
       }
       let delay;
@@ -45,12 +51,20 @@ export const retry = ({
         delay = settings.retryDelayFn({
           attemptNumber,
           startedAt,
+          settings,
+          previousDelay,
+          stop: () => {
+            stopped = true;
+          },
         });
+        if (stopped) {
+          throw new RetryError("Was manually stopped");
+        }
       } else {
         delay = settings.retryDelay;
       }
       await wait(delay);
-      return tick();
+      return tick(delay);
     }
   };
   return tick();

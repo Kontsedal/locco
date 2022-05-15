@@ -1,7 +1,8 @@
 import { ILockAdapter } from "./adapters";
 import { retry, RetrySettings } from "./utils/retry";
 import { getRandomHash } from "./utils/getRandomHash";
-import { LockCreateError } from "./errors";
+import { LoccoError, LockCreateError } from "./errors";
+import * as validators from "./validators";
 
 export class Lock {
   private adapter: ILockAdapter;
@@ -24,6 +25,7 @@ export class Lock {
     ttl: number;
     uniqueValue?: string;
   }) {
+    validators.validateRetrySettings(retrySettings);
     this.retrySettings = retrySettings;
     this.adapter = adapter;
     this.key = key;
@@ -47,7 +49,9 @@ export class Lock {
 
   async release(throwError = false) {
     if (this.released) {
-      throw new Error("Locco:::Lock:::release Can't release resource twice");
+      throw new LoccoError(
+        "Locco:::Lock:::release Can't release resource twice"
+      );
     }
     try {
       await this.adapter.releaseLock({
@@ -62,14 +66,16 @@ export class Lock {
     }
   }
 
-  async extend(ttl) {
+  async extend(ttl: number) {
     if (!this.locked) {
-      throw new Error(
+      throw new LoccoError(
         "Locco:::Lock:::extend Can't extend a lock before a lock success"
       );
     }
     if (this.release) {
-      throw new Error("Locco:::Lock:::extend Can't extend a released lock");
+      throw new LoccoError(
+        "Locco:::Lock:::extend Can't extend a released lock"
+      );
     }
     return this.adapter.extendLock({
       key: this.key,
@@ -80,15 +86,14 @@ export class Lock {
 
   setRetrySettings(settings: RetrySettings) {
     if (this.locked) {
-      throw new Error(
-        "Locco:::Lock:::setRetrySettings Can't change retry settings after lock success"
-      );
+      throw new LoccoError("Can't change retry settings after lock success");
     }
+    validators.validateRetrySettings(settings);
     return new Lock({
       adapter: this.adapter,
       key: this.key,
       ttl: this.ttl,
-      retrySettings: { ...this.retrySettings, ...settings },
+      retrySettings: settings,
     });
   }
 }
