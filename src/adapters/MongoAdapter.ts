@@ -30,7 +30,7 @@ export class MongoAdapter implements ILockAdapter {
       this.collection.createIndex({ key: 1 }, { unique: true }),
       this.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
       this.collection.createIndex(
-        { key: 1, expireAt: 1 },
+        { key: 1, expireAt: 1, uniqueValue: 1 },
         { background: true }
       ),
     ]);
@@ -74,8 +74,8 @@ export class MongoAdapter implements ILockAdapter {
     await this.createIndexes();
     const result = await this.collection.deleteOne({
       key,
-      uniqueValue,
       expireAt: { $gt: new Date() },
+      uniqueValue,
     });
     if (result.deletedCount === 0) {
       throw new LockReleaseError();
@@ -96,8 +96,8 @@ export class MongoAdapter implements ILockAdapter {
       await this.collection.updateOne(
         {
           key,
-          uniqueValue,
           expireAt: { $gt: new Date() },
+          uniqueValue,
         },
         { $set: { key, uniqueValue, expireAt: new Date(Date.now() + ttl) } },
         { upsert: true }
