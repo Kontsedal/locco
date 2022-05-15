@@ -19,6 +19,10 @@ export function isUndefined(value: unknown) {
   return typeof value === "undefined";
 }
 
+export function isStringWithContents(value: unknown) {
+  return typeof value === "string" && value.length > 0;
+}
+
 export function validateRetrySettings(settings: RetrySettings) {
   const { retryDelayFn, retryDelay, retryTimes, totalTime } = settings;
   if (!isUndefinedOrPositiveInteger(retryDelay)) {
@@ -42,6 +46,26 @@ export function validateRetrySettings(settings: RetrySettings) {
   ) {
     throw new ValidationError(
       "retryTimes and retryDelay should be specified if retryDelayFn is not provided"
+    );
+  }
+}
+
+export function validateTtl(ttl: unknown) {
+  if (!isPositiveInteger(ttl)) {
+    throw new ValidationError("Ttl should be a positive integer");
+  }
+}
+export function validateKey(key: unknown) {
+  if (!isStringWithContents(key)) {
+    throw new ValidationError(
+      "Ttl should be a string with at least one character"
+    );
+  }
+}
+export function validateUniqueValue(uniqueValue: unknown) {
+  if (!isStringWithContents(uniqueValue)) {
+    throw new ValidationError(
+      "uniqueValue should be a string with at least one character"
     );
   }
 }

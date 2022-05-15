@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
+import * as validators from "../validators";
 
 type EnhancedRedis = Redis & {
   releaseLock: (key: string, uniqueValue: string) => Promise<number>;
@@ -25,6 +26,9 @@ export class IoRedisAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const result = await this.client.set(key, uniqueValue, "PX", ttl, "NX");
     if (result !== "OK") {
       throw new LockCreateError();
@@ -38,6 +42,8 @@ export class IoRedisAdapter implements ILockAdapter {
     key: string;
     uniqueValue: string;
   }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const script = `
       if redis.call("get",KEYS[1]) == ARGV[1] then
         return redis.call("del",KEYS[1])
@@ -68,6 +74,9 @@ export class IoRedisAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const script = `
       if redis.call("get", KEYS[1]) == ARGV[1] then
         return redis.call("set", KEYS[1], ARGV[1], "PX", ARGV[2])

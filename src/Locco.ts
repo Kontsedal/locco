@@ -2,7 +2,7 @@ import { ILockAdapter } from "./adapters";
 import { RetrySettings } from "./utils/retry";
 import { Lock } from "./Lock";
 import * as validators from "./validators";
-import { LoccoError } from "./errors";
+import { ValidationError } from "./errors";
 
 export class Locco {
   private adapter: ILockAdapter;
@@ -16,7 +16,7 @@ export class Locco {
     retrySettings?: RetrySettings;
   }) {
     if (!adapter) {
-      throw new LoccoError("Locco:::constructor Adapter is required");
+      throw new ValidationError("Adapter is required");
     }
     validators.validateRetrySettings(retrySettings);
     this.adapter = adapter;
@@ -24,9 +24,8 @@ export class Locco {
   }
 
   lock(key: string, ttl: number) {
-    if (!key || !ttl) {
-      throw new LoccoError("Locco:::lock Key and ttl are required");
-    }
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
     return new Lock({
       adapter: this.adapter,
       key,

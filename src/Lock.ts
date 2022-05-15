@@ -26,6 +26,8 @@ export class Lock {
     uniqueValue?: string;
   }) {
     validators.validateRetrySettings(retrySettings);
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
     this.retrySettings = retrySettings;
     this.adapter = adapter;
     this.key = key;
@@ -77,6 +79,7 @@ export class Lock {
         "Locco:::Lock:::extend Can't extend a released lock"
       );
     }
+    validators.validateTtl(ttl);
     return this.adapter.extendLock({
       key: this.key,
       uniqueValue: this.uniqueValue,
@@ -86,7 +89,9 @@ export class Lock {
 
   setRetrySettings(settings: RetrySettings) {
     if (this.locked) {
-      throw new LoccoError("Can't change retry settings after lock success");
+      throw new LoccoError(
+        "Locco:::setRetrySettings Can't change retry settings after lock success"
+      );
     }
     validators.validateRetrySettings(settings);
     return new Lock({
@@ -94,6 +99,7 @@ export class Lock {
       key: this.key,
       ttl: this.ttl,
       retrySettings: settings,
+      uniqueValue: this.uniqueValue,
     });
   }
 }

@@ -1,6 +1,7 @@
 import { Collection, MongoClient } from "mongodb";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
+import * as validators from "../validators";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;
 
@@ -46,6 +47,9 @@ export class MongoAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     await this.createIndexes();
     try {
       await this.collection.updateOne(
@@ -71,6 +75,8 @@ export class MongoAdapter implements ILockAdapter {
     key: string;
     uniqueValue: string;
   }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     await this.createIndexes();
     const result = await this.collection.deleteOne({
       key,
@@ -91,6 +97,9 @@ export class MongoAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     await this.createIndexes();
     try {
       await this.collection.updateOne(

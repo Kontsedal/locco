@@ -1,5 +1,6 @@
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./LockAdapterInterface";
+import * as validators from "../validators";
 
 type LockEntry = {
   expireAt: number;
@@ -17,6 +18,9 @@ export class InMemoryAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const entry = this.storage.get(key);
     if (entry && entry.expireAt > Date.now()) {
       throw new LockCreateError();
@@ -31,6 +35,8 @@ export class InMemoryAdapter implements ILockAdapter {
     key: string;
     uniqueValue: string;
   }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const entry = this.storage.get(key);
     const now = Date.now();
     if (!entry || entry.expireAt < now) {
@@ -51,6 +57,9 @@ export class InMemoryAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const entry = this.storage.get(key);
     if (
       entry &&
@@ -70,6 +79,9 @@ export class InMemoryAdapter implements ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) {
+    validators.validateTtl(ttl);
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
     const expireAt = Date.now() + ttl;
     this.storage.set(key, { uniqueValue, expireAt });
     setTimeout(() => {
