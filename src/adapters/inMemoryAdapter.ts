@@ -88,6 +88,7 @@ export class InMemoryAdapter implements ILockAdapter {
     setTimeout(() => {
       const entryAfterTime = this.storage.get(key);
       if (
+        entryAfterTime &&
         entryAfterTime.uniqueValue === uniqueValue &&
         entryAfterTime.expireAt === expireAt
       ) {
