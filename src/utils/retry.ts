@@ -27,7 +27,6 @@ export const retry = ({
   validators.validateRetrySettings(settings);
   let attemptNumber = -1;
   let startedAt = Date.now();
-  let stopped = false;
   const tick = async (previousDelay = 0) => {
     if (settings.totalTime && Date.now() - startedAt >= settings.totalTime) {
       throw new RetryError("Total time exceeded");
@@ -54,12 +53,9 @@ export const retry = ({
           settings,
           previousDelay,
           stop: () => {
-            stopped = true;
+            throw new RetryError("Was manually stopped");
           },
         });
-        if (stopped) {
-          throw new RetryError("Was manually stopped");
-        }
       } else {
         delay = settings.retryDelay;
       }
