@@ -28,6 +28,7 @@ export class MongoAdapter implements ILockAdapter {
     }
     await Promise.all([
       this.collection.createIndex({ key: 1 }, { unique: true }),
+      this.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
       this.collection.createIndex(
         { key: 1, expireAt: 1 },
         { background: true }
