@@ -24,6 +24,13 @@ export default {
 
   // The directory where Jest should output its coverage files
   coverageDirectory: "coverage",
+  collectCoverageFrom: [
+    "src/**/*.ts",
+    "!src/**/delays.ts",
+    "!src/**/lockAdapterInterface.ts",
+    "!src/**/index.ts",
+    "!src/**/testConfig.ts",
+  ],
 
   // An array of regexp pattern strings used to skip coverage collection
   // coveragePathIgnorePatterns: [
