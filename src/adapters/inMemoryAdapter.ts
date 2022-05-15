@@ -1,5 +1,5 @@
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
-import { ILockAdapter } from "./LockAdapterInterface";
+import { ILockAdapter } from "./lockAdapterInterface";
 import * as validators from "../utils/validators";
 
 type LockEntry = {

@@ -1,6 +1,6 @@
 import { ILockAdapter } from "./adapters";
 import { RetrySettings } from "./utils/retry";
-import { Lock } from "./Lock";
+import { Lock } from "./lock";
 import * as validators from "./utils/validators";
 import { ValidationError } from "./errors";
 
