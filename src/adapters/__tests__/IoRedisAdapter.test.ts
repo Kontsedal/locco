@@ -1,19 +1,25 @@
-import { beforeEach, describe, expect, it } from "@jest/globals";
-import { InMemoryAdapter } from "../InMemoryAdapter";
+import { beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
 import {
   LockCreateError,
   LockExtendError,
   LockReleaseError,
 } from "../../errors";
 import { wait } from "../../utils/wait";
+import Redis from "ioredis";
+import { IoRedisAdapter } from "../IoRedisAdapter";
 import { getRandomHash } from "../../utils/getRandomHash";
 
-describe("InMemoryAdapter", () => {
-  const adapter = new InMemoryAdapter();
+describe("IoRedisAdapter", () => {
+  const redis = new Redis(6380, {
+    showFriendlyErrorStack: true,
+    lazyConnect: true,
+  });
+  const adapter = new IoRedisAdapter({ client: redis });
   let key;
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
   });
+
   it("should not allow to access a locked resource", async () => {
     await adapter.createLock({ key: key, ttl: 500, uniqueValue: "1" });
     await wait(100);
@@ -64,7 +70,7 @@ describe("InMemoryAdapter", () => {
   });
 
   it("should not allow to extend an already taken lock", async () => {
-    await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
+    await adapter.createLock({ key: key, ttl: 1000, uniqueValue: "1" });
     expect(
       adapter.extendLock({ key: key, uniqueValue: "2", ttl: 10000 })
     ).rejects.toThrow(LockExtendError);

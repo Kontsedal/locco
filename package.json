@@ -22,6 +22,7 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc -w",
+    "compose": "docker-compose up",
     "test": "jest",
     "lint": "eslint src --ext .ts"
   },

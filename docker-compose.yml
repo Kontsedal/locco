@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo
+    restart: always
+    container_name: locco-mongodb
+    ports:
+      - "27018:27017"
+  redis:
+    image: redis
+    restart: always
+    container_name: locco-redis
+    ports:
+      - "6380:6379"
+
