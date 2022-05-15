@@ -32,7 +32,7 @@ describe("MongoAdapter", () => {
 
   it("should allow to access a locked resource after ttl", async () => {
     await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
-    await wait(100);
+    await wait(110);
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).resolves.toBe(undefined);

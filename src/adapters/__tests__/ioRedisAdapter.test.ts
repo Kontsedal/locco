@@ -20,7 +20,6 @@ describe("IoRedisAdapter", () => {
 
   it("should not allow to access a locked resource", async () => {
     await adapter.createLock({ key: key, ttl: 500, uniqueValue: "1" });
-    await wait(100);
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).rejects.toThrow(LockCreateError);

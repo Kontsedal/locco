@@ -47,7 +47,7 @@ describe("Locco", () => {
     });
     it("should allow to lock an expired resource", async () => {
       await locco.lock(key, 100).acquire();
-      await wait(101);
+      await wait(110);
       await expect(locco.lock(key, 1000).acquire()).resolves.toBeDefined();
     });
     it("should allow to lock an released resource", async () => {
@@ -71,7 +71,7 @@ describe("Locco", () => {
     });
     it("should not allow to extend an expired lock", async () => {
       const lock = await locco.lock(key, 100).acquire();
-      await wait(105);
+      await wait(110);
       await expect(lock.extend(300)).rejects.toThrow(LockExtendError);
     });
     it("should not allow to release another lock", async () => {
@@ -134,7 +134,7 @@ describe("Locco", () => {
     });
     it("should allow to lock an expired resource", async () => {
       await locco.lock(key, 100).acquire();
-      await wait(101);
+      await wait(110);
       await expect(locco.lock(key, 1000).acquire()).resolves.toBeDefined();
     });
     it("should allow to lock an released resource", async () => {
@@ -158,7 +158,7 @@ describe("Locco", () => {
     });
     it("should not allow to extend an expired lock", async () => {
       const lock = await locco.lock(key, 100).acquire();
-      await wait(105);
+      await wait(110);
       await expect(lock.extend(300)).rejects.toThrow(LockExtendError);
     });
     it("should not allow to release another lock", async () => {
@@ -226,7 +226,7 @@ describe("Locco", () => {
     });
     it("should allow to lock an expired resource", async () => {
       await locco.lock(key, 100).acquire();
-      await wait(101);
+      await wait(110);
       await expect(locco.lock(key, 1000).acquire()).resolves.toBeDefined();
     });
     it("should allow to lock an released resource", async () => {
@@ -250,7 +250,7 @@ describe("Locco", () => {
     });
     it("should not allow to extend an expired lock", async () => {
       const lock = await locco.lock(key, 100).acquire();
-      await wait(105);
+      await wait(110);
       await expect(lock.extend(300)).rejects.toThrow(LockExtendError);
     });
     it("should not allow to release another lock", async () => {
