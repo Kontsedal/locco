@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
-import { retry, RetrySettings } from "../utils/retry";
-import { ValidationError } from "../errors";
 import { normalizeDelay, normalizeDelays } from "./utils/delays";
+import { RetrySettings, retry } from "../utils/retry";
+import { ValidationError } from "../errors";
 
 describe("Retry helper", () => {
   it("should retry on error specified times", async () => {

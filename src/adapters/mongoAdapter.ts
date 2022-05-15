@@ -1,5 +1,5 @@
-import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./lockAdapterInterface";
+import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import * as validators from "../utils/validators";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;

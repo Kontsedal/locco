@@ -6,12 +6,12 @@ import {
   expect,
   it,
 } from "@jest/globals";
+import { MongoClient } from "mongodb";
+import { TEST_CONFIG } from "./testConfig";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { wait } from "../utils/wait";
 import { getRandomHash } from "../utils/getRandomHash";
-import { MongoClient } from "mongodb";
 import { MongoAdapter } from "../adapters/mongoAdapter";
-import { TEST_CONFIG } from "./testConfig";
 
 describe("MongoAdapter", () => {
   let adapter: MongoAdapter;

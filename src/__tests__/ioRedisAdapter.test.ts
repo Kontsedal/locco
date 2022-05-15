@@ -1,10 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "@jest/globals";
+import Redis from "ioredis";
+import { TEST_CONFIG } from "./testConfig";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { wait } from "../utils/wait";
-import Redis from "ioredis";
 import { IoRedisAdapter } from "../adapters/ioRedisAdapter";
 import { getRandomHash } from "../utils/getRandomHash";
-import { TEST_CONFIG } from "./testConfig";
 
 describe("IoRedisAdapter", () => {
   const redis = new Redis(TEST_CONFIG.REDIS_PORT);

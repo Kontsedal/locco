@@ -1,8 +1,8 @@
-import { ILockAdapter } from "./adapters/lockAdapterInterface";
-import { retry, RetrySettings } from "./utils/retry";
-import { getRandomHash } from "./utils/getRandomHash";
 import { LoccoError, LockCreateError } from "./errors";
+import { RetrySettings, retry } from "./utils/retry";
 import * as validators from "./utils/validators";
+import { ILockAdapter } from "./adapters/lockAdapterInterface";
+import { getRandomHash } from "./utils/getRandomHash";
 import { isFunction } from "./utils/validators";
 
 export class Lock {
@@ -54,8 +54,6 @@ export class Lock {
     if (isFunction(cb)) {
       try {
         await cb(this);
-      } catch (error) {
-        throw error;
       } finally {
         await this.release();
       }

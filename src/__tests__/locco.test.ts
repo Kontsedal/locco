@@ -7,6 +7,11 @@ import {
   it,
   jest,
 } from "@jest/globals";
+import Redis from "ioredis";
+import { MongoClient } from "mongodb";
+import { normalizeDelay } from "./utils/delays";
+import { mapTimes } from "./utils/function";
+import { TEST_CONFIG } from "./testConfig";
 import { getRandomHash } from "../utils/getRandomHash";
 import {
   LoccoError,
@@ -16,11 +21,6 @@ import {
   ValidationError,
 } from "../errors";
 import { wait } from "../utils/wait";
-import { normalizeDelay } from "./utils/delays";
-import { mapTimes } from "./utils/function";
-import Redis from "ioredis";
-import { MongoClient } from "mongodb";
-import { TEST_CONFIG } from "./testConfig";
 import { IoRedisAdapter } from "../adapters/ioRedisAdapter";
 import { InMemoryAdapter } from "../adapters/inMemoryAdapter";
 import { Locco } from "../locco";
@@ -114,6 +114,17 @@ describe("Locco", () => {
         .setRetrySettings({ retryTimes: 15, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
     });
+    it("should release lock automatically if callback is passed to the execute method and throws an error", async () => {
+      try {
+        await locco.lock(key, 10000).acquire(async () => {
+          throw new Error("Ooopsie");
+        });
+      } catch (error) {}
+      const secondLock = await locco
+        .lock(key, 100)
+        .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
+      await expect(secondLock.acquire()).resolves.toBe(secondLock);
+    });
   });
 
   describe("IoRedisAdapter", () => {
@@ -203,6 +214,18 @@ describe("Locco", () => {
       const secondLock = await locco
         .lock(key, 100)
         .setRetrySettings({ retryTimes: 15, retryDelay: 20 });
+      await expect(secondLock.acquire()).resolves.toBe(secondLock);
+    });
+
+    it("should release lock automatically if callback is passed to the execute method and throws an error", async () => {
+      try {
+        await locco.lock(key, 10000).acquire(async () => {
+          throw new Error("Ooopsie");
+        });
+      } catch (error) {}
+      const secondLock = await locco
+        .lock(key, 100)
+        .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
     });
   });
@@ -299,6 +322,17 @@ describe("Locco", () => {
       const secondLock = await locco
         .lock(key, 100)
         .setRetrySettings({ retryTimes: 15, retryDelay: 20 });
+      await expect(secondLock.acquire()).resolves.toBe(secondLock);
+    });
+    it("should release lock automatically if callback is passed to the execute method and throws an error", async () => {
+      try {
+        await locco.lock(key, 10000).acquire(async () => {
+          throw new Error("Ooopsie");
+        });
+      } catch (error) {}
+      const secondLock = await locco
+        .lock(key, 100)
+        .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
     });
   });

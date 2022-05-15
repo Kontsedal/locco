@@ -1,8 +1,8 @@
-import { RetrySettings } from "./utils/retry";
-import { Lock } from "./lock";
 import * as validators from "./utils/validators";
-import { ValidationError } from "./errors";
+import { Lock } from "./lock";
 import { ILockAdapter } from "./adapters/lockAdapterInterface";
+import { RetrySettings } from "./utils/retry";
+import { ValidationError } from "./errors";
 
 export class Locco {
   private adapter: ILockAdapter;
