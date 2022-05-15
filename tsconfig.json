@@ -4,9 +4,12 @@
     "target": "es2015",
     "declaration": true,
     "outDir": "./dist",
-    "sourceMap": true
+    "sourceMap": true,
   },
   "include": [
     "src/**/*"
+  ],
+  "exclude": [
+    "src/__tests__/**/*.ts",
   ]
 }

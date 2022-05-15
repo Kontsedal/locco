@@ -16,11 +16,11 @@ import {
   ValidationError,
 } from "../errors";
 import { wait } from "../utils/wait";
-import { normalizeDelay } from "../utils/delays";
-import { mapTimes } from "../utils/function";
+import { normalizeDelay } from "./utils/delays";
+import { mapTimes } from "./utils/function";
 import Redis from "ioredis";
 import { MongoClient } from "mongodb";
-import { TEST_CONFIG } from "../testConfig";
+import { TEST_CONFIG } from "./testConfig";
 import { IoRedisAdapter } from "../adapters/ioRedisAdapter";
 import { InMemoryAdapter } from "../adapters/inMemoryAdapter";
 import { Locco } from "../locco";
