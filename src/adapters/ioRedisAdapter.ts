@@ -1,9 +1,16 @@
-import Redis from "ioredis";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./lockAdapterInterface";
 import * as validators from "../utils/validators";
 
-type EnhancedRedis = Redis & {
+type RedisLikeClient = {
+  set: (...params: any[]) => Promise<"OK" | null>;
+  defineCommand: (
+    name: string,
+    params: { lua: string; numberOfKeys?: number }
+  ) => void;
+};
+
+type EnhancedRedis = RedisLikeClient & {
   releaseLock: (key: string, uniqueValue: string) => Promise<number>;
   extendLock: (
     key: string,
@@ -13,8 +20,8 @@ type EnhancedRedis = Redis & {
 };
 
 export class IoRedisAdapter implements ILockAdapter {
-  private client: Redis;
-  constructor({ client }: { client: Redis }) {
+  private client: RedisLikeClient;
+  constructor({ client }: { client: RedisLikeClient }) {
     this.client = client;
   }
   async createLock({

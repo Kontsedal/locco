@@ -1,13 +1,32 @@
-import { Collection, MongoClient } from "mongodb";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import { ILockAdapter } from "./lockAdapterInterface";
 import * as validators from "../utils/validators";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;
 
+export type MongoLikeClient = {
+  db: (name: string) => { collection: (name: string) => MongoLikeCollection };
+};
+
+export type MongoLikeCollection = {
+  createIndex: (
+    spec: Record<string, 1 | -1>,
+    options: {
+      unique?: boolean;
+      expireAfterSeconds?: number;
+      background?: boolean;
+    }
+  ) => Promise<unknown>;
+  updateOne: (
+    query: Record<string, any>,
+    setter: Record<string, any>,
+    options?: { upsert?: boolean }
+  ) => Promise<unknown>;
+  deleteOne: (query: Record<string, any>) => Promise<{ deletedCount: number }>;
+};
+
 export class MongoAdapter implements ILockAdapter {
-  private client: MongoClient;
-  private collection: Collection;
+  private collection: MongoLikeCollection;
   private indexesCreated: boolean;
 
   constructor({
@@ -15,11 +34,10 @@ export class MongoAdapter implements ILockAdapter {
     locksCollectionName = "locco-locks",
     dbName,
   }: {
-    client: MongoClient;
+    client: MongoLikeClient;
     dbName?: string;
     locksCollectionName?: string;
   }) {
-    this.client = client;
     this.collection = client.db(dbName).collection(locksCollectionName);
   }
 
