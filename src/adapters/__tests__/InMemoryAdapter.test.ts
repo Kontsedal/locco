@@ -17,7 +17,7 @@ describe("InMemoryAdapter", () => {
   it("should not allow to access a locked resource", async () => {
     await adapter.createLock({ key: key, ttl: 500, uniqueValue: "1" });
     await wait(100);
-    expect(
+    await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).rejects.toThrow(LockCreateError);
   });
@@ -25,7 +25,7 @@ describe("InMemoryAdapter", () => {
   it("should allow to access a locked resource after ttl", async () => {
     await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
     await wait(100);
-    expect(
+    await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).resolves.toBe(undefined);
   });
@@ -34,38 +34,38 @@ describe("InMemoryAdapter", () => {
     await adapter.createLock({ key: key, ttl: 1000000, uniqueValue: "1" });
     await adapter.releaseLock({ key: key, uniqueValue: "1" });
 
-    expect(
+    await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).resolves.toBe(undefined);
   });
 
   it("should not allow to release an already taken lock ", async () => {
     await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
-    expect(adapter.releaseLock({ key: key, uniqueValue: "2" })).rejects.toThrow(
-      LockReleaseError
-    );
+    await expect(
+      adapter.releaseLock({ key: key, uniqueValue: "2" })
+    ).rejects.toThrow(LockReleaseError);
   });
 
   it("should not allow to release an expired lock ", async () => {
     await adapter.createLock({ key: key, ttl: 10, uniqueValue: "1" });
     await wait(40);
-    expect(adapter.releaseLock({ key: key, uniqueValue: "1" })).rejects.toThrow(
-      LockReleaseError
-    );
+    await expect(
+      adapter.releaseLock({ key: key, uniqueValue: "1" })
+    ).rejects.toThrow(LockReleaseError);
   });
 
   it("should allow to extend lock", async () => {
     await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
     await adapter.extendLock({ key: key, uniqueValue: "1", ttl: 10000 });
     await wait(200);
-    expect(
+    await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).rejects.toThrow(LockCreateError);
   });
 
   it("should not allow to extend an already taken lock", async () => {
     await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
-    expect(
+    await expect(
       adapter.extendLock({ key: key, uniqueValue: "2", ttl: 10000 })
     ).rejects.toThrow(LockExtendError);
   });

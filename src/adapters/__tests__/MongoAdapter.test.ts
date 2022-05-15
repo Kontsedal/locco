@@ -1,21 +1,22 @@
-import { beforeEach, describe, expect, it } from "@jest/globals";
+import { beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
 import {
   LockCreateError,
   LockExtendError,
   LockReleaseError,
 } from "../../errors";
 import { wait } from "../../utils/wait";
-import Redis from "ioredis";
-import { IoRedisAdapter } from "../IoRedisAdapter";
 import { getRandomHash } from "../../utils/getRandomHash";
+import { MongoClient } from "mongodb";
+import { MongoAdapter } from "../MongoAdapter";
 
-describe("IoRedisAdapter", () => {
-  const redis = new Redis(6380, {
-    showFriendlyErrorStack: true,
-    lazyConnect: true,
-  });
-  const adapter = new IoRedisAdapter({ client: redis });
+describe("MongoAdapter", () => {
+  let adapter: MongoAdapter;
   let key;
+  beforeAll(async () => {
+    const mongo = new MongoClient("mongodb://localhost:27018/locco-test");
+    await mongo.connect();
+    adapter = new MongoAdapter({ client: mongo });
+  });
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
   });
@@ -39,6 +40,7 @@ describe("IoRedisAdapter", () => {
   it("should allow to access a released resource", async () => {
     await adapter.createLock({ key: key, ttl: 1000000, uniqueValue: "1" });
     await adapter.releaseLock({ key: key, uniqueValue: "1" });
+
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
     ).resolves.toBe(undefined);
@@ -60,11 +62,12 @@ describe("IoRedisAdapter", () => {
   });
 
   it("should allow to extend lock", async () => {
-    await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
-    await adapter.extendLock({ key: key, uniqueValue: "1", ttl: 10000 });
+    const testKey = "debug_" + key;
+    await adapter.createLock({ key: testKey, ttl: 100, uniqueValue: "1" });
+    await adapter.extendLock({ key: testKey, ttl: 100000, uniqueValue: "1" });
     await wait(200);
     await expect(
-      adapter.createLock({ key: key, ttl: 100, uniqueValue: "2" })
+      adapter.createLock({ key: testKey, ttl: 100, uniqueValue: "2" })
     ).rejects.toThrow(LockCreateError);
   });
 

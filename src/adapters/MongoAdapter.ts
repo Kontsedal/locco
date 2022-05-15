@@ -15,8 +15,8 @@ export class MongoAdapter implements ILockAdapter {
     dbName,
   }: {
     client: MongoClient;
-    dbName: string;
-    locksCollectionName: string;
+    dbName?: string;
+    locksCollectionName?: string;
   }) {
     this.client = client;
     this.collection = client.db(dbName).collection(locksCollectionName);
@@ -74,6 +74,7 @@ export class MongoAdapter implements ILockAdapter {
     const result = await this.collection.deleteOne({
       key,
       uniqueValue,
+      expireAt: { $gt: new Date() },
     });
     if (result.deletedCount === 0) {
       throw new LockReleaseError();
