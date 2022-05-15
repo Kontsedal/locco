@@ -7,8 +7,6 @@ import {
   jest,
 } from "@jest/globals";
 import { getRandomHash } from "../utils/getRandomHash";
-import { InMemoryAdapter, IoRedisAdapter, MongoAdapter } from "../adapters";
-import { Locco } from "../locco";
 import {
   LoccoError,
   LockExtendError,
@@ -22,6 +20,10 @@ import { mapTimes } from "../utils/function";
 import Redis from "ioredis";
 import { MongoClient } from "mongodb";
 import { TEST_CONFIG } from "../testConfig";
+import { IoRedisAdapter } from "../adapters/ioRedisAdapter";
+import { InMemoryAdapter } from "../adapters/inMemoryAdapter";
+import { Locco } from "../locco";
+import { MongoAdapter } from "../adapters/mongoAdapter";
 
 describe("Locco", () => {
   let key;

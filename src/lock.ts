@@ -1,4 +1,4 @@
-import { ILockAdapter } from "./adapters";
+import { ILockAdapter } from "./adapters/lockAdapterInterface";
 import { retry, RetrySettings } from "./utils/retry";
 import { getRandomHash } from "./utils/getRandomHash";
 import { LoccoError, LockCreateError } from "./errors";
