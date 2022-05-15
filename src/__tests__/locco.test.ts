@@ -1,4 +1,5 @@
 import {
+  afterAll,
   beforeAll,
   beforeEach,
   describe,
@@ -116,12 +117,16 @@ describe("Locco", () => {
   });
 
   describe("IoRedisAdapter", () => {
+    const client = new Redis(TEST_CONFIG.REDIS_PORT);
     const adapter = new IoRedisAdapter({
-      client: new Redis(TEST_CONFIG.REDIS_PORT),
+      client: client,
     });
     const locco = new Locco({
       adapter,
       retrySettings: { retryDelay: 10, retryTimes: 300 },
+    });
+    afterAll(() => {
+      client.disconnect();
     });
     it("should not allow to get a locked resource", async () => {
       await locco.lock(key, 1000).acquire();
@@ -204,8 +209,9 @@ describe("Locco", () => {
 
   describe("MongoAdapter", () => {
     let locco;
+    let client: MongoClient;
     beforeAll(async () => {
-      const client = new MongoClient(TEST_CONFIG.MONGO_URL);
+      client = new MongoClient(TEST_CONFIG.MONGO_URL);
       await client.connect();
       const adapter = new MongoAdapter({
         client,
@@ -214,6 +220,9 @@ describe("Locco", () => {
         adapter,
         retrySettings: { retryDelay: 10, retryTimes: 300 },
       });
+    });
+    afterAll(() => {
+      client.close();
     });
     it("should not allow to get a locked resource", async () => {
       await locco.lock(key, 1000).acquire();

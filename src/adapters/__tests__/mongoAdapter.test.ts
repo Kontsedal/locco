@@ -1,4 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "@jest/globals";
 import {
   LockCreateError,
   LockExtendError,
@@ -13,13 +20,18 @@ import { TEST_CONFIG } from "../../testConfig";
 describe("MongoAdapter", () => {
   let adapter: MongoAdapter;
   let key;
+  let mongo;
   beforeAll(async () => {
-    const mongo = new MongoClient(TEST_CONFIG.MONGO_URL);
+    mongo = new MongoClient(TEST_CONFIG.MONGO_URL);
     await mongo.connect();
     adapter = new MongoAdapter({ client: mongo });
   });
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
+  });
+
+  afterAll(() => {
+    mongo.close();
   });
 
   it("should not allow to access a locked resource", async () => {

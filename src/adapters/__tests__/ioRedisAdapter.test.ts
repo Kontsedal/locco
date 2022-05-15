@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "@jest/globals";
+import { afterAll, beforeEach, describe, expect, it } from "@jest/globals";
 import {
   LockCreateError,
   LockExtendError,
@@ -16,6 +16,9 @@ describe("IoRedisAdapter", () => {
   let key;
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
+  });
+  afterAll(() => {
+    redis.disconnect();
   });
 
   it("should not allow to access a locked resource", async () => {
