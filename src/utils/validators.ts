@@ -1,21 +1,25 @@
 import { ValidationError } from "../errors";
 import { RetrySettings } from "./retry";
 
-export function isPositiveInteger(value: unknown) {
+export function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Math.floor(value) === value;
 }
 
-export function isUndefinedOrPositiveInteger(value: unknown) {
+export function isUndefinedOrPositiveInteger(
+  value: unknown
+): value is number | undefined {
   return isUndefined(value) || isPositiveInteger(value);
 }
 
-export function isUndefinedOrFunction(value: unknown) {
+export function isUndefinedOrFunction(
+  value: unknown
+): value is undefined | Function {
   return isUndefined(value) || isFunction(value);
 }
-export function isFunction(value: unknown) {
+export function isFunction(value: unknown): value is Function {
   return typeof value === "function";
 }
-export function isUndefined(value: unknown) {
+export function isUndefined(value: unknown): value is undefined {
   return typeof value === "undefined";
 }
 

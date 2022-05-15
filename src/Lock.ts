@@ -3,6 +3,7 @@ import { retry, RetrySettings } from "./utils/retry";
 import { getRandomHash } from "./utils/getRandomHash";
 import { LoccoError, LockCreateError } from "./errors";
 import * as validators from "./utils/validators";
+import { isFunction } from "./utils/validators";
 
 export class Lock {
   private adapter: ILockAdapter;
@@ -35,7 +36,10 @@ export class Lock {
     this.uniqueValue = uniqueValue ?? getRandomHash();
   }
 
-  async execute() {
+  async acquire<T>(cb?: (lock: Lock) => T): Promise<Lock> {
+    if (this.locked) {
+      throw new LoccoError("Lock is already acquired");
+    }
     await retry({
       settings: this.retrySettings,
       fn: () =>
@@ -46,10 +50,20 @@ export class Lock {
         }),
       shouldProceedFn: (error) => error instanceof LockCreateError,
     });
+    this.locked = true;
+    if (isFunction(cb)) {
+      try {
+        await cb(this);
+      } catch (error) {
+        throw error;
+      } finally {
+        await this.release();
+      }
+    }
     return this;
   }
 
-  async release(throwError = false) {
+  async release({ throwOnFail = false }: { throwOnFail?: boolean } = {}) {
     if (this.released) {
       throw new LoccoError(
         "Locco:::Lock:::release Can't release resource twice"
@@ -62,7 +76,7 @@ export class Lock {
       });
       this.released = true;
     } catch (error) {
-      if (throwError) {
+      if (throwOnFail) {
         throw error;
       }
     }
@@ -74,7 +88,7 @@ export class Lock {
         "Locco:::Lock:::extend Can't extend a lock before a lock success"
       );
     }
-    if (this.release) {
+    if (this.released) {
       throw new LoccoError(
         "Locco:::Lock:::extend Can't extend a released lock"
       );

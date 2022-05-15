@@ -1,10 +1,11 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import { retry, RetrySettings } from "../retry";
 import { ValidationError } from "../../errors";
+import { normalizeDelay, normalizeDelays } from "../delays";
 
 describe("Retry helper", () => {
   it("should retry on error specified times", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject());
+    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -23,7 +24,7 @@ describe("Retry helper", () => {
     const startedAt = Date.now();
     const fn = jest.fn().mockImplementation(() => {
       delays.push(Date.now() - startedAt);
-      return Promise.reject();
+      return Promise.reject(new Error());
     });
     try {
       await retry({
@@ -41,7 +42,7 @@ describe("Retry helper", () => {
     );
   });
   it("should not retry if shouldProceedFn decided so", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject());
+    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -70,7 +71,7 @@ describe("Retry helper", () => {
   });
 
   it("should not retry if retry was manually stopped", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject());
+    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -89,7 +90,7 @@ describe("Retry helper", () => {
   });
 
   it("should stop retry on provided timeout", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject());
+    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
     const startedAt = Date.now();
     const timeout = 200;
     try {
@@ -103,7 +104,7 @@ describe("Retry helper", () => {
         shouldProceedFn: () => true,
       });
     } catch (error) {}
-    let timeDiff = Date.now() - startedAt;
+    const timeDiff = Date.now() - startedAt;
     expect(normalizeDelay(timeout, timeDiff)).toBe(timeout);
   });
 
@@ -147,23 +148,3 @@ describe("Retry helper", () => {
     });
   });
 });
-
-function normalizeDelays(expected: number[], received: number[]) {
-  const result = [];
-  received.forEach((delay, index) => {
-    const expectedDelay = expected[index];
-    if (typeof expectedDelay !== "number") {
-      result.push(delay);
-      return;
-    }
-    result.push(normalizeDelay(expectedDelay, delay));
-  });
-  return result;
-}
-
-function normalizeDelay(expected: number, received: number) {
-  const maxDiff = 15;
-  return received >= expected && received - maxDiff <= expected
-    ? expected
-    : received;
-}

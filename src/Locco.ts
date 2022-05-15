@@ -13,7 +13,7 @@ export class Locco {
     retrySettings,
   }: {
     adapter: ILockAdapter;
-    retrySettings?: RetrySettings;
+    retrySettings: RetrySettings;
   }) {
     if (!adapter) {
       throw new ValidationError("Adapter is required");

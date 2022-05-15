@@ -62,8 +62,9 @@ export class InMemoryAdapter implements ILockAdapter {
     validators.validateUniqueValue(uniqueValue);
     const entry = this.storage.get(key);
     if (
-      entry &&
-      (entry.expireAt < Date.now() || entry.uniqueValue !== uniqueValue)
+      !entry ||
+      (entry &&
+        (entry.expireAt <= Date.now() || entry.uniqueValue !== uniqueValue))
     ) {
       throw new LockExtendError();
     }

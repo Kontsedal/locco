@@ -26,7 +26,7 @@ export const retry = ({
 }) => {
   validators.validateRetrySettings(settings);
   let attemptNumber = -1;
-  let startedAt = Date.now();
+  const startedAt = Date.now();
   const tick = async (previousDelay = 0) => {
     if (settings.totalTime && Date.now() - startedAt >= settings.totalTime) {
       throw new RetryError("Total time exceeded");
