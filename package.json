@@ -1,6 +1,6 @@
 {
   "name": "@kontsedal/locco",
-  "version": "0.0.1-beta.3",
+  "version": "0.0.1-beta.4",
   "keywords": [
     "lock",
     "distributed locks",
@@ -29,7 +29,7 @@
     "url": "https://github.com/Kontsedal/locco.git"
   },
   "scripts": {
-    "build": "rm -rf ./build && tsc && tsc -p tsconfig.cjs.json",
+    "build": "rm -rf ./build && tsc && tsc -p tsconfig.cjs.json && ./fixup.sh",
     "compose": "docker-compose up",
     "test": "jest",
     "lint": "eslint src --ext .ts",
