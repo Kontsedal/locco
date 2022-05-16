@@ -1,17 +1,8 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig-base.json",
   "compilerOptions": {
-    "declarationDir": null,
-    "declaration": false,
     "module": "commonjs",
     "outDir": "./dist/cjs",
-    "strict": true,
-    "sourceMap": true
+    "target": "es2015",
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "src/__tests__/**/*.ts",
-  ]
 }
