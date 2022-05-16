@@ -72,12 +72,7 @@ await locco.lock("user:123", 3000).setRetrySettings({retryDelay: 200, retryTimes
 });
 ```
 
-The first parameter of the **_lock_** function is a key of a resource that should be locked and the second one is
-a time of lock existence(in milliseconds).
-
 ## API
-
----
 
 ### Locco
 
