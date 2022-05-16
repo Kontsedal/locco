@@ -7,7 +7,7 @@ import {
   it,
 } from "@jest/globals";
 import { MongoClient } from "mongodb";
-import { TEST_CONFIG } from "./testConfig";
+import { TEST_CONFIG } from "./config";
 import {
   LockCreateError,
   LockExtendError,

@@ -26,16 +26,16 @@ When we release or extend a lock, we check that lock exists in the storage and h
 There are two ways to create a resource lock. In the first one, you should manually lock and unlock a resource. Here is an example with a Redis:
 
 ```typescript
-import { Locco, IoRedisAdapter } from "@kontsedal/locco";
+import { Locker, IoRedisAdapter } from "@kontsedal/locco";
 import Redis from "ioredis";
 
 const redisAdapter = new IoRedisAdapter({ client: new Redis() });
-const locco = new Locco({
+const locker = new Locker({
   adapter: redisAdapter,
   retrySettings: { retryDelay: 200, retryTimes: 10 },
 });
 
-const lock = await locco.lock("user:123", 3000).aquire();
+const lock = await locker.lock("user:123", 3000).aquire();
 try {
   //do some risky stuff here
   //...
@@ -52,18 +52,18 @@ try {
 In the second one, you pass a function in the **acquire** method and a lock will be released automatically when a function finishes. Here is an example with a mongo:
 
 ```typescript
-import { Locco, IoRedisAdapter, MongoAdapter } from "@kontsedal/locco";
+import { Locker, IoRedisAdapter, MongoAdapter } from "@kontsedal/Locker";
 import { MongoClient } from "mongodb";
 
 const mongoAdapter = new MongoAdapter({
   client: new MongoClient(process.env.MONGO_URL),
 });
-const locco = new Locco({
+const locker = new Locker({
   adapter: mongoAdapter,
   retrySettings: { retryDelay: 200, retryTimes: 10 },
 });
 
-await locco.lock("user:123", 3000).setRetrySettings({retryDelay: 200, retryTimes: 50}).aquire(async (lock) => {
+await locker.lock("user:123", 3000).setRetrySettings({retryDelay: 200, retryTimes: 50}).aquire(async (lock) => {
   //do some risky stuff here
   //...
   await lock.extend(2000);
@@ -74,7 +74,7 @@ await locco.lock("user:123", 3000).setRetrySettings({retryDelay: 200, retryTimes
 
 ## API
 
-### Locco
+### Locker
 
 The main class is responsible for the creation of new locks and passing them a storage adapter and default retrySettings.
 
@@ -92,7 +92,7 @@ Constructor params:
 Example of a retryDelayFn usage:
 
 ```typescript
-const locco = new Locco({
+const locker = new Locker({
   adapter: new InMemoryAdapter(),
   retrySettings: {
     retryDelayFn: ({
@@ -120,7 +120,7 @@ Provided example will do the same as providing retryTimes = 5, retryDelay = 50
 Creates a **Lock** instance with provided key and time to live in milliseconds.
 It won't lock a resource at this point. Need to call an **aquire()** to do so
 
-##### _Lock.aquire(cb?: (locco: Locco) => void) => Promise\<Lock>_
+##### _Lock.aquire(cb?: (lock: Lock) => void) => Promise\<Lock>_
 
 Locks a resource if possible. If not, it retries as much as specified in the retrySettings.
 If callback is provided, lock will be released after a callback execution.

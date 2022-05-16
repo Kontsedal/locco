@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "@jest/globals";
 import Redis from "ioredis";
-import { TEST_CONFIG } from "./testConfig";
+import { TEST_CONFIG } from "./config";
 import {
   LockCreateError,
   LockExtendError,

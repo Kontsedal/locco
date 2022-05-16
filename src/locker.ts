@@ -3,7 +3,7 @@ import { Lock } from "./lock";
 import { ILockAdapter } from "./adapters/lockAdapterInterface";
 import { RetrySettings } from "./utils/retry";
 
-export class Locco {
+export class Locker {
   private adapter: ILockAdapter;
   private retrySettings: RetrySettings;
 
