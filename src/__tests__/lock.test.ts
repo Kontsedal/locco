@@ -26,7 +26,7 @@ import { Locco } from "../locco";
 import { MongoAdapter } from "../adapters/mongoAdapter";
 
 describe("Locco", () => {
-  let key;
+  let key: string;
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
   });
@@ -230,7 +230,7 @@ describe("Locco", () => {
   });
 
   describe("MongoAdapter", () => {
-    let locco;
+    let locco: Locco;
     let client: MongoClient;
     beforeAll(async () => {
       client = new MongoClient(TEST_CONFIG.MONGO_URL);
