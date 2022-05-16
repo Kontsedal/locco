@@ -2,7 +2,6 @@ import * as validators from "./utils/validators";
 import { Lock } from "./lock";
 import { ILockAdapter } from "./adapters/lockAdapterInterface";
 import { RetrySettings } from "./utils/retry";
-import { ValidationError } from "./errors";
 
 export class Locco {
   private adapter: ILockAdapter;
@@ -15,9 +14,7 @@ export class Locco {
     adapter: ILockAdapter;
     retrySettings: RetrySettings;
   }) {
-    if (!adapter) {
-      throw new ValidationError("Adapter is required");
-    }
+    validators.validateAdapter(adapter);
     validators.validateRetrySettings(retrySettings);
     this.adapter = adapter;
     this.retrySettings = retrySettings;

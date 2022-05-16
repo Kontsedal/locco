@@ -8,7 +8,12 @@ import {
 } from "@jest/globals";
 import { MongoClient } from "mongodb";
 import { TEST_CONFIG } from "./testConfig";
-import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
+import {
+  LockCreateError,
+  LockExtendError,
+  LockReleaseError,
+  ValidationError,
+} from "../errors";
 import { wait } from "../utils/wait";
 import { getRandomHash } from "../utils/getRandomHash";
 import { MongoAdapter } from "../adapters/mongoAdapter";
@@ -85,5 +90,71 @@ describe("MongoAdapter", () => {
     await expect(
       adapter.extendLock({ key: key, uniqueValue: "2", ttl: 10000 })
     ).rejects.toThrow(LockExtendError);
+  });
+
+  it("should not swallow mongo errors on createLock", async () => {
+    const error = new Error("Some mongo error");
+    const adapter = new MongoAdapter({
+      client: {
+        db: () => ({
+          collection: () => ({
+            createIndex: () => Promise.resolve(),
+            updateOne: () => Promise.reject(error),
+            deleteOne: () => Promise.reject(error),
+          }),
+        }),
+      },
+    });
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" })
+    ).rejects.toThrow(error);
+  });
+
+  it("should not swallow mongo errors on releaseLock", async () => {
+    const error = new Error("Some mongo error");
+    const adapter = new MongoAdapter({
+      client: {
+        db: () => ({
+          collection: () => ({
+            createIndex: () => Promise.resolve(),
+            updateOne: () => Promise.reject(error),
+            deleteOne: () => Promise.reject(error),
+          }),
+        }),
+      },
+    });
+    await expect(
+      adapter.releaseLock({ key: key, uniqueValue: "1" })
+    ).rejects.toThrow(error);
+  });
+
+  it("should not swallow mongo errors on extendLock", async () => {
+    const error = new Error("Some mongo error");
+    const adapter = new MongoAdapter({
+      client: {
+        db: () => ({
+          collection: () => ({
+            createIndex: () => Promise.resolve(),
+            updateOne: () => Promise.reject(error),
+            deleteOne: () => Promise.reject(error),
+          }),
+        }),
+      },
+    });
+    await expect(
+      adapter.extendLock({ key: key, uniqueValue: "2", ttl: 100 })
+    ).rejects.toThrow(error);
+  });
+
+  it("should validate an unique value", async () => {
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: "" })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: 1 as any })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: undefined as any })
+    ).rejects.toThrow(ValidationError);
   });
 });

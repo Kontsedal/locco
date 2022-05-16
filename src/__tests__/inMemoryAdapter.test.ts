@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "@jest/globals";
 import { InMemoryAdapter } from "../adapters/inMemoryAdapter";
-import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
+import {
+  LockCreateError,
+  LockExtendError,
+  LockReleaseError,
+  ValidationError,
+} from "../errors";
 import { wait } from "../utils/wait";
 import { getRandomHash } from "../utils/getRandomHash";
 
@@ -64,5 +69,17 @@ describe("InMemoryAdapter", () => {
     await expect(
       adapter.extendLock({ key: key, uniqueValue: "2", ttl: 300 })
     ).rejects.toThrow(LockExtendError);
+  });
+
+  it("should validate an unique value", async () => {
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: "" })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: 1 as any })
+    ).rejects.toThrow(ValidationError);
+    await expect(
+      adapter.createLock({ key: key, ttl: 100, uniqueValue: undefined as any })
+    ).rejects.toThrow(ValidationError);
   });
 });

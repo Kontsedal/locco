@@ -19,6 +19,9 @@ export function isUndefinedOrFunction(
 export function isFunction(value: unknown): value is Function {
   return typeof value === "function";
 }
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object";
+}
 export function isUndefined(value: unknown): value is undefined {
   return typeof value === "undefined";
 }
@@ -71,5 +74,18 @@ export function validateUniqueValue(uniqueValue: unknown) {
     throw new ValidationError(
       "uniqueValue should be a string with at least one character"
     );
+  }
+}
+
+export function validateAdapter(adapter: unknown) {
+  if (!isObject(adapter)) {
+    throw new ValidationError("Adapter is required");
+  }
+  if (
+    !isFunction(adapter.createLock) ||
+    !isFunction(adapter.releaseLock) ||
+    !isFunction(adapter.extendLock)
+  ) {
+    throw new ValidationError("Adapter is invalid");
   }
 }
