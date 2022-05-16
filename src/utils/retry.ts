@@ -27,7 +27,7 @@ export const retry = ({
   validators.validateRetrySettings(settings);
   let attemptNumber = -1;
   const startedAt = Date.now();
-  const tick = async (previousDelay = 0) => {
+  const tick = async (previousDelay = 0): Promise<void> => {
     if (settings.totalTime && Date.now() - startedAt >= settings.totalTime) {
       throw new RetryError("Total time exceeded");
     }
@@ -45,9 +45,9 @@ export const retry = ({
       ) {
         throw new RetryError("Reached retry times limit");
       }
-      let delay;
+      let delay: number;
       if (settings.retryDelayFn) {
-        delay = settings.retryDelayFn({
+        delay = await settings.retryDelayFn({
           attemptNumber,
           startedAt,
           settings,
@@ -57,10 +57,10 @@ export const retry = ({
           },
         });
       } else {
-        delay = settings.retryDelay;
+        delay = settings.retryDelay as number;
       }
-      await wait(delay);
-      return tick(delay);
+      await wait(delay as number);
+      return tick(delay as number);
     }
   };
   return tick();

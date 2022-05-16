@@ -1,10 +1,15 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
-    "target": "es2015",
+    "lib": ["es2020"],
+    "target": "es2018",
+    "module": "es2020",
+    "outDir": "./dist/esm",
     "declaration": true,
-    "outDir": "./dist",
-    "sourceMap": true,
+    "declarationDir": "./dist/types",
+    "moduleResolution": "node",
+    "rootDir": "./src",
+    "strict": true,
+    "sourceMap": true
   },
   "include": [
     "src/**/*"

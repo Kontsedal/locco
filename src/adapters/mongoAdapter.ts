@@ -1,11 +1,12 @@
 import { ILockAdapter } from "./lockAdapterInterface";
+import { isMongoError } from "../utils/validators";
 import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
 import * as validators from "../utils/validators";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;
 
 export type MongoLikeClient = {
-  db: (name: string) => { collection: (name: string) => MongoLikeCollection };
+  db: (name?: string) => { collection: (name: string) => MongoLikeCollection };
 };
 
 export type MongoLikeCollection = {
@@ -27,7 +28,7 @@ export type MongoLikeCollection = {
 
 export class MongoAdapter implements ILockAdapter {
   private collection: MongoLikeCollection;
-  private indexesCreated: boolean;
+  private indexesCreated = false;
 
   constructor({
     client,
@@ -79,7 +80,7 @@ export class MongoAdapter implements ILockAdapter {
         { upsert: true }
       );
     } catch (error) {
-      if (error.code === MONGO_DUPLICATE_ERROR_CODE) {
+      if (isMongoError(error) && error?.code === MONGO_DUPLICATE_ERROR_CODE) {
         throw new LockCreateError();
       }
       throw error;
@@ -130,7 +131,7 @@ export class MongoAdapter implements ILockAdapter {
         { upsert: true }
       );
     } catch (error) {
-      if (error.code === MONGO_DUPLICATE_ERROR_CODE) {
+      if (isMongoError(error) && error?.code === MONGO_DUPLICATE_ERROR_CODE) {
         throw new LockExtendError();
       }
       throw error;

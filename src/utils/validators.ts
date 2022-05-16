@@ -26,6 +26,13 @@ export function isUndefined(value: unknown): value is undefined {
   return typeof value === "undefined";
 }
 
+export type MongoError = {
+  code: number;
+};
+export function isMongoError(value: unknown): value is MongoError {
+  return value instanceof Error && "code" in value;
+}
+
 export function isStringWithContents(value: unknown) {
   return typeof value === "string" && value.length > 0;
 }
