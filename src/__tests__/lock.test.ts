@@ -124,6 +124,12 @@ describe("Locco", () => {
         .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
     });
+    it("should allow to check if lock is still valid", async () => {
+      const lock = await locker.lock(key, 100).acquire();
+      await expect(lock.isLocked()).resolves.toBe(true);
+      await wait(110);
+      await expect(lock.isLocked()).resolves.toBe(false);
+    });
   });
 
   describe("IoRedisAdapter", () => {
@@ -226,6 +232,13 @@ describe("Locco", () => {
         .lock(key, 100)
         .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
+    });
+
+    it("should allow to check if lock is still valid", async () => {
+      const lock = await locker.lock(key, 100).acquire();
+      await expect(lock.isLocked()).resolves.toBe(true);
+      await wait(110);
+      await expect(lock.isLocked()).resolves.toBe(false);
     });
   });
 
@@ -333,6 +346,12 @@ describe("Locco", () => {
         .lock(key, 100)
         .setRetrySettings({ retryTimes: 1, retryDelay: 20 });
       await expect(secondLock.acquire()).resolves.toBe(secondLock);
+    });
+    it("should allow to check if lock is still valid", async () => {
+      const lock = await locker.lock(key, 100).acquire();
+      await expect(lock.isLocked()).resolves.toBe(true);
+      await wait(110);
+      await expect(lock.isLocked()).resolves.toBe(false);
     });
   });
 
