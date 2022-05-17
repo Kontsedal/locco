@@ -134,6 +134,10 @@ To make it throw an error, need to provide `{throwOnFail:true}`.
 
 Extends a lock for a provided milliseconds from now. Will throw an error if current lock is already invalid
 
+##### _Lock.isLocked() => Promise\<boolean>_
+
+Checks if a lock still valid
+
 ##### _Lock.setRetrySettings(settings: RetrySettings) => Promise\<Lock>_
 
 Overrides a default retry settings of the lock.

@@ -11,7 +11,7 @@ import { getRandomHash } from "../utils/getRandomHash";
 
 describe("InMemoryAdapter", () => {
   const adapter = new InMemoryAdapter();
-  let key;
+  let key: string;
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
   });
@@ -81,5 +81,19 @@ describe("InMemoryAdapter", () => {
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: undefined as any })
     ).rejects.toThrow(ValidationError);
+  });
+
+  it("should return a correct lock status", async () => {
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
+    await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(true);
+    await wait(110);
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
   });
 });

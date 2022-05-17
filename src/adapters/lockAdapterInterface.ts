@@ -26,4 +26,12 @@ export interface ILockAdapter {
     uniqueValue: string;
     ttl: number;
   }) => Promise<void>;
+
+  isValidLock: ({
+    key,
+    uniqueValue,
+  }: {
+    key: string;
+    uniqueValue: string;
+  }) => Promise<boolean>;
 }

@@ -4,6 +4,7 @@ import * as validators from "../utils/validators";
 
 type RedisLikeClient = {
   set: (...params: any[]) => Promise<"OK" | null>;
+  get: (...params: any[]) => Promise<string | null>;
   defineCommand: (
     name: string,
     params: { lua: string; numberOfKeys?: number }
@@ -104,5 +105,18 @@ export class IoRedisAdapter implements ILockAdapter {
       return;
     }
     throw new LockExtendError();
+  }
+
+  async isValidLock({
+    key,
+    uniqueValue,
+  }: {
+    key: string;
+    uniqueValue: string;
+  }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
+    const entry = await this.client.get(key);
+    return Boolean(entry && entry === uniqueValue);
   }
 }

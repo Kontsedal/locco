@@ -23,6 +23,7 @@ export type MongoLikeCollection = {
     setter: Record<string, any>,
     options?: { upsert?: boolean }
   ) => Promise<unknown>;
+  findOne: (query: Record<string, any>) => Promise<unknown>;
   deleteOne: (query: Record<string, any>) => Promise<{ deletedCount: number }>;
 };
 
@@ -136,5 +137,22 @@ export class MongoAdapter implements ILockAdapter {
       }
       throw error;
     }
+  }
+
+  async isValidLock({
+    key,
+    uniqueValue,
+  }: {
+    key: string;
+    uniqueValue: string;
+  }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
+    const entry = await this.collection.findOne({
+      key,
+      expireAt: { $gt: new Date() },
+      uniqueValue,
+    });
+    return Boolean(entry);
   }
 }

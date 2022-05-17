@@ -80,6 +80,13 @@ export class Lock {
     }
   }
 
+  async isLocked() {
+    return this.adapter.isValidLock({
+      key: this.key,
+      uniqueValue: this.uniqueValue,
+    });
+  }
+
   async extend(ttl: number) {
     if (!this.locked) {
       throw new LoccoError(

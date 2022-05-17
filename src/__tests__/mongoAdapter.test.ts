@@ -20,8 +20,8 @@ import { MongoAdapter } from "../adapters/mongoAdapter";
 
 describe("MongoAdapter", () => {
   let adapter: MongoAdapter;
-  let key;
-  let mongo;
+  let key: string;
+  let mongo: MongoClient;
   beforeAll(async () => {
     mongo = new MongoClient(TEST_CONFIG.MONGO_URL);
     await mongo.connect();
@@ -99,6 +99,7 @@ describe("MongoAdapter", () => {
         db: () => ({
           collection: () => ({
             createIndex: () => Promise.resolve(),
+            findOne: () => Promise.resolve(),
             updateOne: () => Promise.reject(error),
             deleteOne: () => Promise.reject(error),
           }),
@@ -117,6 +118,7 @@ describe("MongoAdapter", () => {
         db: () => ({
           collection: () => ({
             createIndex: () => Promise.resolve(),
+            findOne: () => Promise.resolve(),
             updateOne: () => Promise.reject(error),
             deleteOne: () => Promise.reject(error),
           }),
@@ -135,6 +137,7 @@ describe("MongoAdapter", () => {
         db: () => ({
           collection: () => ({
             createIndex: () => Promise.resolve(),
+            findOne: () => Promise.resolve(),
             updateOne: () => Promise.reject(error),
             deleteOne: () => Promise.reject(error),
           }),
@@ -156,5 +159,19 @@ describe("MongoAdapter", () => {
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: undefined as any })
     ).rejects.toThrow(ValidationError);
+  });
+
+  it("should return a correct lock status", async () => {
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
+    await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(true);
+    await wait(110);
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
   });
 });

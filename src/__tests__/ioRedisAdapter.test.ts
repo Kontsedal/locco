@@ -14,7 +14,7 @@ import { getRandomHash } from "../utils/getRandomHash";
 describe("IoRedisAdapter", () => {
   const redis = new Redis(TEST_CONFIG.REDIS_PORT);
   const adapter = new IoRedisAdapter({ client: redis });
-  let key;
+  let key: string;
   beforeEach(() => {
     key = `test_key_` + getRandomHash();
   });
@@ -86,5 +86,19 @@ describe("IoRedisAdapter", () => {
     await expect(
       adapter.createLock({ key: key, ttl: 100, uniqueValue: undefined as any })
     ).rejects.toThrow(ValidationError);
+  });
+
+  it("should return a correct lock status", async () => {
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
+    await adapter.createLock({ key: key, ttl: 100, uniqueValue: "1" });
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(true);
+    await wait(110);
+    await expect(
+      adapter.isValidLock({ key: key, uniqueValue: "1" })
+    ).resolves.toBe(false);
   });
 });

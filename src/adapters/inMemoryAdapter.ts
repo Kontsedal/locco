@@ -71,6 +71,20 @@ export class InMemoryAdapter implements ILockAdapter {
     this.setLock({ key, uniqueValue, ttl });
   }
 
+  async isValidLock({
+    key,
+    uniqueValue,
+  }: {
+    key: string;
+    uniqueValue: string;
+  }) {
+    validators.validateKey(key);
+    validators.validateUniqueValue(uniqueValue);
+    const entry = this.storage.get(key);
+    return Boolean(
+      entry && entry.uniqueValue === uniqueValue && entry.expireAt > Date.now()
+    );
+  }
   private setLock({
     key,
     uniqueValue,
