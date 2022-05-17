@@ -1,6 +1,6 @@
 {
   "name": "@kontsedal/locco",
-  "version": "0.0.1-beta.5",
+  "version": "0.0.1",
   "keywords": [
     "lock",
     "distributed locks",
@@ -54,6 +54,5 @@
     "typescript": "4.6.4",
     "eslint-plugin-import": "2.26.0"
   },
-  "dependencies": {
-  }
+  "dependencies": {}
 }
