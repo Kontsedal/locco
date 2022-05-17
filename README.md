@@ -136,7 +136,7 @@ Extends a lock for a provided milliseconds from now. Will throw an error if curr
 
 ##### _Lock.isLocked() => Promise\<boolean>_
 
-Checks if a lock still valid
+Checks if a lock is still valid
 
 ##### _Lock.setRetrySettings(settings: RetrySettings) => Promise\<Lock>_
 
