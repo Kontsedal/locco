@@ -29,7 +29,7 @@
     "url": "https://github.com/Kontsedal/locco.git"
   },
   "scripts": {
-    "build": "rm -rf ./build && tsc && tsc -p tsconfig.cjs.json && ./fixup.sh",
+    "build": "del-cli ./build && tsc && tsc -p tsconfig.cjs.json && ./fixup.sh",
     "compose": "docker-compose up",
     "test": "jest",
     "lint": "eslint src --ext .ts",
@@ -42,6 +42,7 @@
     "@jest/globals": "28.1.0",
     "@typescript-eslint/eslint-plugin": "5.25.0",
     "@typescript-eslint/parser": "5.25.0",
+    "del-cli": "^5.1.0",
     "eslint": "8.15.0",
     "eslint-config-google": "0.14.0",
     "eslint-config-prettier": "8.5.0",
