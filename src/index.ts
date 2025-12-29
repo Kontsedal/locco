@@ -1,8 +1,8 @@
-export * as errors from "./errors.js";
-export * from "./locker.js";
-export * from "./lock.js";
-export * from "./adapters/inMemoryAdapter.js";
-export * from "./adapters/ioRedisAdapter.js";
-export * from "./adapters/lockAdapterInterface.js";
-export * from "./adapters/mongoAdapter.js";
-export * as validators from "./utils/validators.js";
+export * from "./locker";
+export * from "./lock";
+export * from "./adapters/inMemoryAdapter";
+export * from "./adapters/ioRedisAdapter";
+export * from "./adapters/lockAdapterInterface";
+export * from "./adapters/mongoAdapter";
+export * from "./errors";
+export * from "./utils/validators";

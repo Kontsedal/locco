@@ -1,9 +1,9 @@
-import { LoccoError, LockCreateError } from "./errors.js";
-import { RetrySettings, retry } from "./utils/retry.js";
-import * as validators from "./utils/validators.js";
-import { ILockAdapter } from "./adapters/lockAdapterInterface.js";
-import { getRandomHash } from "./utils/getRandomHash.js";
-import { isFunction } from "./utils/validators.js";
+import { LoccoError, LockCreateError } from "./errors";
+import { RetrySettings, retry } from "./utils/retry";
+import * as validators from "./utils/validators";
+import { ILockAdapter } from "./adapters/lockAdapterInterface";
+import { getRandomHash } from "./utils/getRandomHash";
+import { isFunction } from "./utils/validators";
 
 export class Lock {
   private adapter: ILockAdapter;

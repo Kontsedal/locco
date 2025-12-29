@@ -5,8 +5,8 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from "@jest/globals";
+  vi,
+} from "vitest";
 import Redis from "ioredis";
 import { MongoClient } from "mongodb";
 import { normalizeDelay } from "./utils/delays";
@@ -93,7 +93,7 @@ describe("Locco", () => {
       expect(normalizeDelay(firstLockTtl, timeDiff)).toBe(firstLockTtl);
     });
     it("should deal with race conditions", async () => {
-      const callback = jest.fn();
+      const callback = vi.fn();
       const task = async () => {
         await locker
           .lock(key, 300)
@@ -201,7 +201,7 @@ describe("Locco", () => {
       expect(normalizeDelay(firstLockTtl, timeDiff)).toBe(firstLockTtl);
     });
     it("should deal with race conditions", async () => {
-      const callback = jest.fn();
+      const callback = vi.fn();
       const task = async () => {
         await locker
           .lock(key, 300)
@@ -316,7 +316,7 @@ describe("Locco", () => {
       expect(normalizeDelay(firstLockTtl, timeDiff)).toBe(firstLockTtl);
     });
     it("should deal with race conditions", async () => {
-      const callback = jest.fn();
+      const callback = vi.fn();
       const task = async () => {
         await locker
           .lock(key, 300)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it } from "vitest";
 import { InMemoryAdapter } from "../adapters/inMemoryAdapter";
 import { ValidationError } from "../errors";
 import { Locker } from "../locker";

@@ -1,6 +1,6 @@
-import { wait } from "./wait.js";
-import * as validators from "./validators.js";
-import { RetryError } from "../errors.js";
+import { wait } from "./wait";
+import * as validators from "./validators";
+import { RetryError } from "../errors";
 
 export type RetrySettings = {
   retryTimes?: number;

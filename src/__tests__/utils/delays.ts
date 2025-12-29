@@ -1,5 +1,5 @@
 export function normalizeDelays(expected: number[], received: number[]) {
-  const result = [];
+  const result: number[] = [];
   received.forEach((delay, index) => {
     const expectedDelay = expected[index];
     if (typeof expectedDelay !== "number") {

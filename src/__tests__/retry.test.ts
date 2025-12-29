@@ -1,11 +1,11 @@
-import { describe, expect, it, jest } from "@jest/globals";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeDelay, normalizeDelays } from "./utils/delays";
 import { RetrySettings, retry } from "../utils/retry";
 import { ValidationError } from "../errors";
 
 describe("Retry helper", () => {
   it("should retry on error specified times", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -20,9 +20,9 @@ describe("Retry helper", () => {
   });
 
   it("should retry with a provided delay", async () => {
-    const delays = [];
+    const delays: number[] = [];
     const startedAt = Date.now();
-    const fn = jest.fn().mockImplementation(() => {
+    const fn = vi.fn().mockImplementation(() => {
       delays.push(Date.now() - startedAt);
       return Promise.reject(new Error());
     });
@@ -42,7 +42,7 @@ describe("Retry helper", () => {
     );
   });
   it("should not retry if shouldProceedFn decided so", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -56,7 +56,7 @@ describe("Retry helper", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
   it("should not retry if an operation was successful", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.resolve());
+    const fn = vi.fn().mockImplementation(() => Promise.resolve());
     try {
       await retry({
         settings: {
@@ -71,7 +71,7 @@ describe("Retry helper", () => {
   });
 
   it("should not retry if retry was manually stopped", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
     try {
       await retry({
         settings: {
@@ -90,7 +90,7 @@ describe("Retry helper", () => {
   });
 
   it("should stop retry on provided timeout", async () => {
-    const fn = jest.fn().mockImplementation(() => Promise.reject(new Error()));
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
     const startedAt = Date.now();
     const timeout = 200;
     try {
@@ -109,7 +109,7 @@ describe("Retry helper", () => {
   });
 
   it("should not allow invalid settings", () => {
-    const fn = jest.fn().mockImplementation(() => Promise.resolve());
+    const fn = vi.fn().mockImplementation(() => Promise.resolve());
     const params = {
       fn: fn as () => Promise<void>,
       shouldProceedFn: () => true,

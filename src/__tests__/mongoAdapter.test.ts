@@ -1,11 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "@jest/globals";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MongoClient } from "mongodb";
 import { TEST_CONFIG } from "./config";
 import {
