@@ -1,6 +1,6 @@
 {
   "name": "@kontsedal/locco",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "keywords": [
     "lock",
     "distributed locks",
