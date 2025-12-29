@@ -12,13 +12,14 @@
   "author": "Bohdan Kontsedal <kontsedalbohdan@gmail.com>",
   "description": "Distributed locks library",
   "type": "module",
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/types/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -29,7 +30,7 @@
     "url": "https://github.com/Kontsedal/locco.git"
   },
   "scripts": {
-    "build": "del-cli ./build && tsc && tsc -p tsconfig.cjs.json && ./fixup.sh",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "compose": "docker-compose up",
     "test": "jest",
     "lint": "eslint src --ext .ts",
@@ -40,6 +41,7 @@
     "@babel/preset-env": "7.17.12",
     "@babel/preset-typescript": "7.17.12",
     "@jest/globals": "28.1.0",
+    "@types/jest": "^30.0.0",
     "@typescript-eslint/eslint-plugin": "5.25.0",
     "@typescript-eslint/parser": "5.25.0",
     "del-cli": "^5.1.0",
@@ -53,7 +55,9 @@
     "mongodb": "4.6.0",
     "np": "^9.2.0",
     "prettier": "2.6.2",
+    "ts-jest": "^28.0.8",
     "ts-node": "10.7.0",
-    "typescript": "4.6.4"
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
   }
 }

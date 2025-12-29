@@ -1,7 +1,7 @@
-import { ILockAdapter } from "./lockAdapterInterface";
-import { isMongoError } from "../utils/validators";
-import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
-import * as validators from "../utils/validators";
+import { ILockAdapter } from "./lockAdapterInterface.js";
+import { isMongoError } from "../utils/validators.js";
+import { LockCreateError, LockExtendError, LockReleaseError } from "../errors.js";
+import * as validators from "../utils/validators.js";
 
 const MONGO_DUPLICATE_ERROR_CODE = 11000;
 

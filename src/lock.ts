@@ -1,9 +1,9 @@
-import { LoccoError, LockCreateError } from "./errors";
-import { RetrySettings, retry } from "./utils/retry";
-import * as validators from "./utils/validators";
-import { ILockAdapter } from "./adapters/lockAdapterInterface";
-import { getRandomHash } from "./utils/getRandomHash";
-import { isFunction } from "./utils/validators";
+import { LoccoError, LockCreateError } from "./errors.js";
+import { RetrySettings, retry } from "./utils/retry.js";
+import * as validators from "./utils/validators.js";
+import { ILockAdapter } from "./adapters/lockAdapterInterface.js";
+import { getRandomHash } from "./utils/getRandomHash.js";
+import { isFunction } from "./utils/validators.js";
 
 export class Lock {
   private adapter: ILockAdapter;
@@ -48,12 +48,12 @@ export class Lock {
           uniqueValue: this.uniqueValue,
           ttl: this.ttl,
         }),
-      shouldProceedFn: (error) => error instanceof LockCreateError,
+      shouldProceedFn: (error: any) => error instanceof LockCreateError,
     });
     this.locked = true;
     if (isFunction(cb)) {
       try {
-        await cb(this);
+        await cb!(this);
       } finally {
         await this.release();
       }

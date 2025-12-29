@@ -1,6 +1,6 @@
-import { ILockAdapter } from "./lockAdapterInterface";
-import { LockCreateError, LockExtendError, LockReleaseError } from "../errors";
-import * as validators from "../utils/validators";
+import { ILockAdapter } from "./lockAdapterInterface.js";
+import { LockCreateError, LockExtendError, LockReleaseError } from "../errors.js";
+import * as validators from "../utils/validators.js";
 
 type LockEntry = {
   expireAt: number;

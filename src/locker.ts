@@ -1,7 +1,7 @@
-import * as validators from "./utils/validators";
-import { Lock } from "./lock";
-import { ILockAdapter } from "./adapters/lockAdapterInterface";
-import { RetrySettings } from "./utils/retry";
+import * as validators from "./utils/validators.js";
+import { Lock } from "./lock.js";
+import { ILockAdapter } from "./adapters/lockAdapterInterface.js";
+import { RetrySettings } from "./utils/retry.js";
 
 export class Locker {
   private adapter: ILockAdapter;

@@ -1,6 +1,6 @@
-import { wait } from "./wait";
-import * as validators from "./validators";
-import { RetryError } from "../errors";
+import { wait } from "./wait.js";
+import * as validators from "./validators.js";
+import { RetryError } from "../errors.js";
 
 export type RetrySettings = {
   retryTimes?: number;
@@ -41,7 +41,7 @@ export const retry = ({
       }
       if (
         !validators.isUndefined(settings.retryTimes) &&
-        settings.retryTimes <= attemptNumber + 1
+        settings.retryTimes! <= attemptNumber + 1
       ) {
         throw new RetryError("Reached retry times limit");
       }
