@@ -38,7 +38,7 @@
     "test:run": "vitest run",
     "lint": "biome check src --ext .ts",
     "lint:fix": "biome check --apply src --ext .ts",
-    "publish:package": "npm run build && np"
+    "publish:package": "npm run build && release-it"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
@@ -47,8 +47,8 @@
     "del-cli": "^7.0.0",
     "ioredis": "5.8.2",
     "mongodb": "7.0.0",
-    "np": "^10.2.0",
     "prettier": "3.7.4",
+    "release-it": "^19.2.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "4.0.16"
