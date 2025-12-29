@@ -21,10 +21,6 @@
     "skipLibCheck": true,
     "strict": true,
     "traceResolution": false,
-    "types": [
-      "node",
-      "jest"
-    ]
   },
   "compileOnSave": false,
   "include": [

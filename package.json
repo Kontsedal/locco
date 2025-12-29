@@ -41,6 +41,8 @@
     "publish:package": "npm run build && np"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.0.3",
     "biome": "^0.3.3",
     "del-cli": "^7.0.0",
     "ioredis": "5.8.2",
