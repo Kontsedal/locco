@@ -102,3 +102,4 @@ dist
 .idea
 
 # (eslint removed; using Biome now)
+.npmrc
