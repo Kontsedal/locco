@@ -15,14 +15,13 @@ export type MongoLikeCollection = {
     options: {
       unique?: boolean;
       expireAfterSeconds?: number;
-      background?: boolean;
     }
   ) => Promise<unknown>;
   updateOne: (
     query: Record<string, any>,
     setter: Record<string, any>,
     options?: { upsert?: boolean }
-  ) => Promise<unknown>;
+  ) => Promise<{ matchedCount: number }>;
   findOne: (query: Record<string, any>) => Promise<unknown>;
   deleteOne: (query: Record<string, any>) => Promise<{ deletedCount: number }>;
 };
@@ -30,6 +29,7 @@ export type MongoLikeCollection = {
 export class MongoAdapter implements ILockAdapter {
   private collection: MongoLikeCollection;
   private indexesCreated = false;
+  private indexesPromise: Promise<void> | null = null;
 
   constructor({
     client,
@@ -47,15 +47,19 @@ export class MongoAdapter implements ILockAdapter {
     if (this.indexesCreated) {
       return;
     }
-    await Promise.all([
-      this.collection.createIndex({ key: 1 }, { unique: true }),
-      this.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
-      this.collection.createIndex(
-        { key: 1, expireAt: 1, uniqueValue: 1 },
-        { background: true }
-      ),
-    ]);
-    this.indexesCreated = true;
+    if (!this.indexesPromise) {
+      this.indexesPromise = Promise.all([
+        this.collection.createIndex({ key: 1 }, { unique: true }),
+        this.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
+        this.collection.createIndex(
+          { key: 1, expireAt: 1, uniqueValue: 1 },
+          {}
+        ),
+      ]).then(() => {
+        this.indexesCreated = true;
+      });
+    }
+    return this.indexesPromise;
   }
 
   async createLock({
@@ -121,21 +125,16 @@ export class MongoAdapter implements ILockAdapter {
     validators.validateKey(key);
     validators.validateUniqueValue(uniqueValue);
     await this.createIndexes();
-    try {
-      await this.collection.updateOne(
-        {
-          key,
-          expireAt: { $gt: new Date() },
-          uniqueValue,
-        },
-        { $set: { key, uniqueValue, expireAt: new Date(Date.now() + ttl) } },
-        { upsert: true }
-      );
-    } catch (error) {
-      if (isMongoError(error) && error?.code === MONGO_DUPLICATE_ERROR_CODE) {
-        throw new LockExtendError();
-      }
-      throw error;
+    const result = await this.collection.updateOne(
+      {
+        key,
+        expireAt: { $gt: new Date() },
+        uniqueValue,
+      },
+      { $set: { expireAt: new Date(Date.now() + ttl) } }
+    );
+    if (result.matchedCount === 0) {
+      throw new LockExtendError();
     }
   }
 

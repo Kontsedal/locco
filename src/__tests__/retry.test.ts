@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeDelay, normalizeDelays } from "./utils/delays";
 import { RetrySettings, retry } from "../utils/retry";
-import { ValidationError } from "../errors";
+import { RetryError, ValidationError } from "../errors";
 
 describe("Retry helper", () => {
   it("should retry on error specified times", async () => {
@@ -146,5 +146,84 @@ describe("Retry helper", () => {
         retry({ ...params, settings: settings as RetrySettings })
       ).not.toThrow();
     });
+  });
+
+  it("should support async retryDelayFn", async () => {
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
+    try {
+      await retry({
+        settings: {
+          retryDelayFn: async () => {
+            return 10;
+          },
+          retryTimes: 3,
+        },
+        fn: fn as () => Promise<void>,
+        shouldProceedFn: () => true,
+      });
+    } catch (error) {}
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("should support totalTime with retryDelayFn", async () => {
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
+    const startedAt = Date.now();
+    const timeout = 100;
+    try {
+      await retry({
+        settings: {
+          retryDelayFn: () => 10,
+          totalTime: timeout,
+        },
+        fn: fn as () => Promise<void>,
+        shouldProceedFn: () => true,
+      });
+    } catch (error) {}
+    const timeDiff = Date.now() - startedAt;
+    expect(normalizeDelay(timeout, timeDiff)).toBe(timeout);
+  });
+
+  it("should re-throw original error when shouldProceedFn returns false", async () => {
+    const originalError = new Error("specific error");
+    const fn = vi.fn().mockImplementation(() => Promise.reject(originalError));
+    await expect(
+      retry({
+        settings: {
+          retryTimes: 5,
+          retryDelay: 10,
+        },
+        fn: fn as () => Promise<void>,
+        shouldProceedFn: () => false,
+      })
+    ).rejects.toBe(originalError);
+  });
+
+  it("should throw RetryError with descriptive message on retry times limit", async () => {
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
+    await expect(
+      retry({
+        settings: {
+          retryTimes: 2,
+          retryDelay: 1,
+        },
+        fn: fn as () => Promise<void>,
+        shouldProceedFn: () => true,
+      })
+    ).rejects.toThrow("Reached retry times limit");
+  });
+
+  it("should throw RetryError with descriptive message on total time exceeded", async () => {
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
+    await expect(
+      retry({
+        settings: {
+          retryTimes: 1000,
+          retryDelay: 1,
+          totalTime: 10,
+        },
+        fn: fn as () => Promise<void>,
+        shouldProceedFn: () => true,
+      })
+    ).rejects.toThrow("Total time exceeded");
   });
 });

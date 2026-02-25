@@ -28,7 +28,7 @@ export const retry = ({
   let attemptNumber = -1;
   const startedAt = Date.now();
   const tick = async (previousDelay = 0): Promise<void> => {
-    if (settings.totalTime && Date.now() - startedAt >= settings.totalTime) {
+    if (settings.totalTime !== undefined && Date.now() - startedAt >= settings.totalTime) {
       throw new RetryError("Total time exceeded");
     }
     attemptNumber += 1;

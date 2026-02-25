@@ -12,6 +12,7 @@ export class Lock {
   public readonly uniqueValue: string;
   public readonly ttl: number;
   private locked = false;
+  private acquiring = false;
   private released = false;
   constructor({
     adapter,
@@ -36,24 +37,32 @@ export class Lock {
     this.uniqueValue = uniqueValue ?? getRandomHash();
   }
 
-  async acquire<T>(cb?: (lock: Lock) => T): Promise<Lock> {
-    if (this.locked) {
+  async acquire(): Promise<Lock>;
+  async acquire<T>(cb: (lock: Lock) => T | Promise<T>): Promise<T>;
+  async acquire<T>(cb?: (lock: Lock) => T | Promise<T>): Promise<Lock | T> {
+    if (this.locked || this.acquiring) {
       throw new LoccoError("Lock is already acquired");
     }
-    await retry({
-      settings: this.retrySettings,
-      fn: () =>
-        this.adapter.createLock({
-          key: this.key,
-          uniqueValue: this.uniqueValue,
-          ttl: this.ttl,
-        }),
-      shouldProceedFn: (error: any) => error instanceof LockCreateError,
-    });
-    this.locked = true;
+    this.acquiring = true;
+    try {
+      await retry({
+        settings: this.retrySettings,
+        fn: () =>
+          this.adapter.createLock({
+            key: this.key,
+            uniqueValue: this.uniqueValue,
+            ttl: this.ttl,
+          }),
+        shouldProceedFn: (error: any) => error instanceof LockCreateError,
+      });
+      this.locked = true;
+    } catch (error) {
+      this.acquiring = false;
+      throw error;
+    }
     if (isFunction(cb)) {
       try {
-        await cb!(this);
+        return await cb!(this);
       } finally {
         await this.release();
       }

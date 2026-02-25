@@ -8,6 +8,7 @@ type LockEntry = {
 };
 export class InMemoryAdapter implements ILockAdapter {
   private storage = new Map<string, LockEntry>();
+  private timers = new Map<string, NodeJS.Timeout>();
 
   async createLock({
     key,
@@ -39,13 +40,18 @@ export class InMemoryAdapter implements ILockAdapter {
     validators.validateUniqueValue(uniqueValue);
     const entry = this.storage.get(key);
     const now = Date.now();
-    if (!entry || entry.expireAt < now) {
+    if (!entry || entry.expireAt <= now) {
       throw new LockReleaseError("Lock is already expired");
     }
-    if (entry && entry.uniqueValue !== uniqueValue) {
+    if (entry.uniqueValue !== uniqueValue) {
       throw new LockReleaseError("Lock is already taken");
     }
     this.storage.delete(key);
+    const timer = this.timers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.timers.delete(key);
+    }
   }
 
   async extendLock({
@@ -63,8 +69,8 @@ export class InMemoryAdapter implements ILockAdapter {
     const entry = this.storage.get(key);
     if (
       !entry ||
-      (entry &&
-        (entry.expireAt <= Date.now() || entry.uniqueValue !== uniqueValue))
+      entry.expireAt <= Date.now() ||
+      entry.uniqueValue !== uniqueValue
     ) {
       throw new LockExtendError();
     }
@@ -99,7 +105,11 @@ export class InMemoryAdapter implements ILockAdapter {
     validators.validateUniqueValue(uniqueValue);
     const expireAt = Date.now() + ttl;
     this.storage.set(key, { uniqueValue, expireAt });
-    setTimeout(() => {
+    const existingTimer = this.timers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
       const entryAfterTime = this.storage.get(key);
       if (
         entryAfterTime &&
@@ -108,6 +118,9 @@ export class InMemoryAdapter implements ILockAdapter {
       ) {
         this.storage.delete(key);
       }
+      this.timers.delete(key);
     }, ttl);
+    timer.unref();
+    this.timers.set(key, timer);
   }
 }

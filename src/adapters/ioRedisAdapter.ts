@@ -20,10 +20,34 @@ type EnhancedRedis = RedisLikeClient & {
   ) => Promise<"OK" | null>;
 };
 
+const RELEASE_LOCK_SCRIPT = `
+  if redis.call("get",KEYS[1]) == ARGV[1] then
+    return redis.call("del",KEYS[1])
+  else
+    return 0
+  end
+`;
+
+const EXTEND_LOCK_SCRIPT = `
+  if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("set", KEYS[1], ARGV[1], "PX", ARGV[2])
+  else
+    return nil
+  end
+`;
+
 export class IoRedisAdapter implements ILockAdapter {
-  private client: RedisLikeClient;
+  private client: EnhancedRedis;
   constructor({ client }: { client: RedisLikeClient }) {
-    this.client = client;
+    client.defineCommand("releaseLock", {
+      numberOfKeys: 1,
+      lua: RELEASE_LOCK_SCRIPT,
+    });
+    client.defineCommand("extendLock", {
+      numberOfKeys: 1,
+      lua: EXTEND_LOCK_SCRIPT,
+    });
+    this.client = client as EnhancedRedis;
   }
   async createLock({
     key,
@@ -52,21 +76,7 @@ export class IoRedisAdapter implements ILockAdapter {
   }) {
     validators.validateKey(key);
     validators.validateUniqueValue(uniqueValue);
-    const script = `
-      if redis.call("get",KEYS[1]) == ARGV[1] then
-        return redis.call("del",KEYS[1])
-      else
-        return 0
-      end
-    `;
-    this.client.defineCommand("releaseLock", {
-      numberOfKeys: 1,
-      lua: script,
-    });
-    const result = await (this.client as EnhancedRedis).releaseLock(
-      key,
-      uniqueValue
-    );
+    const result = await this.client.releaseLock(key, uniqueValue);
     if (result === 1) {
       return;
     }
@@ -85,22 +95,7 @@ export class IoRedisAdapter implements ILockAdapter {
     validators.validateTtl(ttl);
     validators.validateKey(key);
     validators.validateUniqueValue(uniqueValue);
-    const script = `
-      if redis.call("get", KEYS[1]) == ARGV[1] then
-        return redis.call("set", KEYS[1], ARGV[1], "PX", ARGV[2])
-      else
-        return nil
-      end
-    `;
-    this.client.defineCommand("extendLock", {
-      numberOfKeys: 1,
-      lua: script,
-    });
-    const result = await (this.client as EnhancedRedis).extendLock(
-      key,
-      uniqueValue,
-      ttl
-    );
+    const result = await this.client.extendLock(key, uniqueValue, ttl);
     if (result === "OK") {
       return;
     }

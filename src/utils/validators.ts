@@ -2,7 +2,7 @@ import { RetrySettings } from "./retry";
 import { ValidationError } from "../errors";
 
 export function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Math.floor(value) === value;
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 export function isUndefinedOrPositiveInteger(
@@ -20,7 +20,7 @@ export function isFunction(value: unknown): value is Function {
   return typeof value === "function";
 }
 export function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object";
+  return typeof value === "object" && value !== null;
 }
 export function isUndefined(value: unknown): value is undefined {
   return typeof value === "undefined";
@@ -38,6 +38,9 @@ export function isStringWithContents(value: unknown) {
 }
 
 export function validateRetrySettings(settings: RetrySettings) {
+  if (!settings || typeof settings !== "object") {
+    throw new ValidationError("Retry settings should be an object");
+  }
   const { retryDelayFn, retryDelay, retryTimes, totalTime } = settings;
   if (!isUndefinedOrPositiveInteger(retryDelay)) {
     throw new ValidationError("retryDelay should be an integer");
@@ -72,7 +75,7 @@ export function validateTtl(ttl: unknown) {
 export function validateKey(key: unknown) {
   if (!isStringWithContents(key)) {
     throw new ValidationError(
-      "Ttl should be a string with at least one character"
+      "Key should be a string with at least one character"
     );
   }
 }
@@ -91,7 +94,8 @@ export function validateAdapter(adapter: unknown) {
   if (
     !isFunction(adapter.createLock) ||
     !isFunction(adapter.releaseLock) ||
-    !isFunction(adapter.extendLock)
+    !isFunction(adapter.extendLock) ||
+    !isFunction(adapter.isValidLock)
   ) {
     throw new ValidationError("Adapter is invalid");
   }

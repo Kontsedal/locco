@@ -5,7 +5,9 @@ export class LoccoError extends Error {
     super(description);
     Object.setPrototypeOf(this, new.target.prototype);
     this.name = name;
-    Error.captureStackTrace(this);
+    if (typeof Error.captureStackTrace === "function") {
+      Error.captureStackTrace(this);
+    }
   }
 }
 

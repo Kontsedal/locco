@@ -18,6 +18,7 @@ import {
   LockExtendError,
   LockReleaseError,
   RetryError,
+  ValidationError,
 } from "../errors";
 import { wait } from "../utils/wait";
 import { IoRedisAdapter } from "../adapters/ioRedisAdapter";
@@ -415,5 +416,58 @@ describe("Locco", () => {
     expect(() =>
       lock.setRetrySettings({ retryDelay: 2, retryTimes: 1 })
     ).toThrow(LoccoError);
+  });
+
+  it("should pass lock object as argument to acquire callback", async () => {
+    const locker = new Locker({
+      adapter: new InMemoryAdapter(),
+      retrySettings: { retryDelay: 20, retryTimes: 10 },
+    });
+    const lock = locker.lock(key, 1000);
+    await lock.acquire(async (receivedLock) => {
+      expect(receivedLock).toBe(lock);
+    });
+  });
+
+  it("should return callback result from acquire", async () => {
+    const locker = new Locker({
+      adapter: new InMemoryAdapter(),
+      retrySettings: { retryDelay: 20, retryTimes: 10 },
+    });
+    const result = await locker.lock(key, 1000).acquire(async () => {
+      return 42;
+    });
+    expect(result).toBe(42);
+  });
+
+  it("should return false from isLocked before acquire", async () => {
+    const locker = new Locker({
+      adapter: new InMemoryAdapter(),
+      retrySettings: { retryDelay: 20, retryTimes: 10 },
+    });
+    const lock = locker.lock(key, 1000);
+    await expect(lock.isLocked()).resolves.toBe(false);
+  });
+
+  it("should return false from isLocked after release", async () => {
+    const locker = new Locker({
+      adapter: new InMemoryAdapter(),
+      retrySettings: { retryDelay: 20, retryTimes: 10 },
+    });
+    const lock = await locker.lock(key, 1000).acquire();
+    await lock.release({ throwOnFail: true });
+    await expect(lock.isLocked()).resolves.toBe(false);
+  });
+
+  it("should throw ValidationError when extending with invalid TTL", async () => {
+    const locker = new Locker({
+      adapter: new InMemoryAdapter(),
+      retrySettings: { retryDelay: 20, retryTimes: 10 },
+    });
+    const lock = await locker.lock(key, 1000).acquire();
+    await expect(lock.extend(0)).rejects.toThrow(ValidationError);
+    await expect(lock.extend(-1)).rejects.toThrow(ValidationError);
+    await expect(lock.extend(1.5)).rejects.toThrow(ValidationError);
+    await expect(lock.extend("100" as any)).rejects.toThrow(ValidationError);
   });
 });
