@@ -132,7 +132,8 @@ caller. Pass the held `Lock` to the code that needs it.
 | `retry` | `RetryOptions` | `{ retries: 10, delay: 200 }` | Default retry policy. Each call can override a field. |
 | `keyPrefix` | `string` | `''` | Prepended to every key. Use it to keep test workers apart. |
 | `onEvent` | `(event: LockEvent) => void` | none | Receives every event. What it throws is dropped. |
-| `now` | `() => number` | `Date.now` | The clock. Tests replace it. |
+| `now` | `() => number` | `performance.now` | A monotonic clock in milliseconds. A wall clock can step backwards and delay the local expiry. Tests replace it. |
+| `token` | `() => string` | 16 random bytes as hex | The value stored under the key. Tests replace it. |
 
 ### `locker.acquire(key, options)`
 
@@ -143,7 +144,7 @@ retry budget or the timeout runs out.
 |---|---|---|
 | `ttl` | `number` | Lease length in milliseconds. Required. |
 | `retry` | `RetryOptions` | Overrides for this call. |
-| `signal` | `AbortSignal` | Stops the retry loop. `acquire` throws `signal.reason`. |
+| `signal` | `AbortSignal` | Stops the retry loop. When it aborts while a winning attempt is in flight, the key is given back. `acquire` throws `signal.reason`. |
 | `autoExtend` | `{ interval?, maxHold }` | Heartbeat. `maxHold` is required here. See below. |
 
 ### `locker.tryAcquire(key, { ttl, autoExtend? })`
@@ -198,10 +199,12 @@ of them.
 `autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and the
 interval must be smaller than the TTL. The timer does not keep the process alive.
 
-`maxHold` is a hard deadline on ownership, counted from acquisition. The last extension is clamped
-so the lease ends at the deadline, and at the deadline `lock.signal` aborts with a `LOCK_MAX_HOLD`
-reason. On `acquire`, `maxHold` is required. On `withLock` it is optional, because the callback
-scope ends the hold.
+`maxHold` is a hard deadline on ownership, counted from acquisition. Every extension, manual or
+from the heartbeat, is clamped so the lease ends at the deadline, and at the deadline
+`lock.signal` aborts with a `LOCK_MAX_HOLD` reason. The lease can outlive the deadline by at most
+the network latency of the last extension, because the backend counts the TTL from the moment it
+handles the request. On `acquire`, `maxHold` is required. On `withLock` it is optional, because
+the callback scope ends the hold.
 
 When an extension fails, throws, or answers after the new lease has run out, the heartbeat stops,
 the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
@@ -212,11 +215,11 @@ the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
 |---|---|
 | `key`, `token`, `ttl`, `retry` | Read-only. `key` includes the prefix. `ttl` is the latest lease length. |
 | `state` | `'held'`, `'lost'` or `'released'`. Loss is sticky until `release()`. |
-| `lostReason` | Why the lock is lost, or `undefined`. |
-| `signal` | Aborts on every known loss. Pass it to the work. |
-| `release()` | `true` when it deleted our key, `false` when the key was gone or not ours. Throws only when the driver throws. A second call returns `false`. |
-| `extend(ttl)` | New lease from now. Throws `LockLostError` when the key was not ours. |
-| `isHeld()` | One observation of the backend. |
+| `lostReason` | Why the lock was lost, or `undefined` when it was never lost. |
+| `signal` | Aborts on every known loss: a failed or late extension, a local lease expiry, the hold deadline, a release or a check that finds the key not ours. Pass it to the work. |
+| `release()` | `true` when it deleted our key, `false` when the key was gone or not ours. Throws only when the driver throws; the lock then keeps its state and a later call tries again. After a successful call, a second call returns `false`. |
+| `extend(ttl)` | New lease from now, clamped to the hold deadline. Throws `LockLostError` when the key was not ours, and the `LOCK_MAX_HOLD` error when the deadline has passed. |
+| `isHeld()` | One observation of the backend. A `false` while the lock is held marks it lost. |
 | `[Symbol.asyncDispose]()` | Calls `release()`. |
 
 ### Errors
@@ -231,6 +234,9 @@ error is not wrapped. It reaches you as the driver threw it.
 | `LockStateError` | `LOCK_STATE` | `extend` on a released lock. |
 | `LoccoError` | `LOCK_MAX_HOLD` | The abort reason on `lock.signal` at the hold deadline. |
 | `ValidationError` | `LOCK_VALIDATION` | A wrong argument. |
+
+A project that loads the package as CommonJS in one place and as ESM in another gets two copies of
+these classes, and `instanceof` fails across them. Check `error.code` there.
 
 ```ts
 try {
@@ -383,7 +389,12 @@ runLockAdapterContract('MyAdapter', () => ({ adapter: new MyAdapter() }));
 ## Migrating from 1.x
 
 See [docs/migrating-to-v2.md](docs/migrating-to-v2.md). The Redis keys and the MongoDB documents
-are unchanged, so 1.x and 2.x processes can share one backend during a rolling deploy.
+are unchanged, so 1.x and 2.x processes can share one backend during a rolling deploy. A codemod
+ships with the package:
+
+```shell
+npx -p @kontsedal/locco locco-migrate-v2 --write src/**/*.ts
+```
 
 ## Requirements
 

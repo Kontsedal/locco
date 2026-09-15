@@ -21,7 +21,12 @@ See [docs/migrating-to-v2.md](docs/migrating-to-v2.md) for the full table and th
 - `release()` returns `true` or `false` and throws only when the driver throws. It no longer
   swallows driver errors, and it has no `throwOnFail` option.
 - `extend()` throws `LockLostError` when the key was not ours.
-- `uniqueValue` is `token`. `isLocked()` is `isHeld()`.
+- `uniqueValue` is `token`. `isLocked()` is `isHeld()`, and a `false` answer while the lock is
+  held marks it lost.
+- `MongoAdapter`'s `locksCollectionName` option is `collectionName`. The old name throws a
+  `TypeError`, so a spread config cannot send the locks to the default collection by mistake.
+- The local clock is monotonic (`performance.now`), so a wall-clock step cannot delay the local
+  expiry estimate.
 - `ILockAdapter` is `LockAdapter`, and its methods return booleans instead of throwing.
 - Each adapter has its own entry point: `@kontsedal/locco/redis`, `/node-redis`, `/mongo`,
   `/postgres`, `/memory`. The testing suite is `@kontsedal/locco/testing`.
@@ -54,6 +59,7 @@ See [docs/migrating-to-v2.md](docs/migrating-to-v2.md) for the full table and th
 - `InMemoryAdapter.clear()`, `Symbol.dispose`, and an injectable clock.
 - `runLockAdapterContract()` for custom adapters.
 - A compatibility suite that runs 1.0.0 and 2.0 against one Redis and one MongoDB.
+- `locco-migrate-v2`, the codemod for the 1.x call shape, ships in the package as a command.
 
 ### Fixed
 
