@@ -2,78 +2,45 @@ name: Build and Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  build_and_test:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
     services:
-      mongodb:
-        image: mongo:4.4.11
-        ports:
-          - 27018:27017
       redis:
-        image: redis
+        image: redis:7
         ports:
           - 6380:6379
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27018:27017
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v3
-      - name: Install Node.js
-        uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 16
-      - name: Cache node_modules
-        id: cache
-        uses: actions/cache@v2
-        with:
-          path: ./node_modules
-          key: modules-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: npm ci
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
       - run: npm run lint
-      - run: npm t
-
-      - name: Get Coverage for badge
-        run: |
-          # var SUMMARY = [
-          #   '',
-          #   '=============================== Coverage summary ===============================',
-          #   'Statements   : 32.5% ( 39/120 )',
-          #   'Branches     : 38.89% ( 21/54 )',
-          #   'Functions    : 21.74% ( 5/23 )',
-          #   'Lines        : 31.93% ( 38/119 )',
-          #   '================================================================================',
-          #   ''
-          # ];
-          # SUMMARY = SUMMARY.split('\n')[5]; // 'Lines        : 31.93% ( 38/119 )'
-          # SUMMARY = SUMMARY.split(':')[1].split('(')[0].trim(); // '31.93%'
-          SUMMARY="$(npm test -- --coverageReporters='text-summary' | tail -2 | head -1)"
-          TOKENS=($SUMMARY)
-          # process.env.COVERAGE = '31.93%';
-          echo "COVERAGE=$(echo ${TOKENS[2]})" >> $GITHUB_ENV
-          
-          # var REF = 'refs/pull/27/merge.json';
-          REF=${{ github.ref }}
-          # console.log('github.ref: ' + REF);
-          echo "github.ref: $REF"
-          # var PATHS = REF.split('/');
-          IFS='/' read -ra PATHS <<< "$REF"
-          # var BRANCH_NAME = PATHS[1] + '_' + PATHS[2];
-          BRANCH_NAME="${PATHS[1]}_${PATHS[2]}"
-          # console.log(BRANCH_NAME); // 'pull_27'
-          echo $BRANCH_NAME
-          # process.env.BRANCH = 'pull_27';
-          echo "BRANCH=$(echo ${BRANCH_NAME})" >> $GITHUB_ENV
-      - name: Create the Badge
-        uses: schneegans/dynamic-badges-action@v1.0.0
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          gistID: e0ad01840d30efd4c1766e5ba5845567
-          filename: locco__${{ env.BRANCH }}.json
-          label: Test Coverage
-          message: ${{ env.COVERAGE }}
-          color: green
-          namedLogo: jest
+      - run: npm run type:check
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npm run check:package

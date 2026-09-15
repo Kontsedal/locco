@@ -1,18 +1,18 @@
-version: '3.8'
-
 services:
-  mongodb:
-    image: mongo
-    restart: always
-    container_name: locco-mongodb
-    ports:
-      - "27018:27017"
-    environment:
-      MONGO_INITDB_DATABASE: locco-test
   redis:
-    image: redis
-    restart: always
+    image: redis:7
     container_name: locco-redis
     ports:
       - "6380:6379"
-
+  mongodb:
+    image: mongo:7
+    container_name: locco-mongodb
+    ports:
+      - "27018:27017"
+  postgres:
+    image: postgres:17
+    container_name: locco-postgres
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"

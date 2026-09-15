@@ -1,28 +1,61 @@
 {
-  "root": true,
-  "files": [
-    "src/**/*.{ts,tsx,js,jsx}",
-    "test/**/*.{ts,tsx,js,jsx}",
-    "vitest.config.ts"
-  ],
-  "exclude": ["dist", "node_modules", "coverage"],
-  "linter": {
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "vcs": {
     "enabled": true,
-    "rules": {
-      "quotes": ["error", "single"],
-      "semi": ["error", "always"],
-      "indent": ["error", 2],
-      "no-unused-vars": ["warn"],
-      "no-console": ["warn"],
-      "eqeqeq": ["error", "always"]
-    }
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["**", "!dist", "!coverage", "!node_modules", "!docs"]
   },
   "formatter": {
     "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
     "rules": {
-      "indent_size": 2,
-      "line_width": 100
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useImportType": "error"
+      }
     }
-  }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/__tests__/**", "src/testing/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    }
+  ]
 }
-
