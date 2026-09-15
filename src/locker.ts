@@ -34,7 +34,7 @@ export type LockerOptions = {
   keyPrefix?: string;
   /** Receives one object per lock event. What it throws or rejects is dropped. */
   onEvent?: LockEventHandler;
-  /** Clock in milliseconds. Default Date.now. Tests replace it. */
+  /** A monotonic clock in milliseconds. Default `performance.now`. Tests replace it. */
   now?: () => number;
   /** Token generator. Default 16 random bytes as hex. Tests replace it. */
   token?: () => string;
@@ -58,6 +58,9 @@ type NormalizeInput = {
 type Prepared = Normalized & { key: string };
 
 const defaultToken = (): string => randomBytes(16).toString('hex');
+
+// A wall clock can step backwards, which would push the local expiry estimate past the backend's.
+const defaultNow = (): number => performance.now();
 
 export class Locker {
   readonly #adapter: LockAdapter;
@@ -89,7 +92,7 @@ export class Locker {
     this.#retry = options.retry;
     this.#keyPrefix = options.keyPrefix ?? '';
     this.#onEvent = options.onEvent;
-    this.#now = options.now ?? Date.now;
+    this.#now = options.now ?? defaultNow;
     this.#token = options.token ?? defaultToken;
   }
 
@@ -113,7 +116,7 @@ export class Locker {
         key: prepared.key,
         ttl: prepared.ttl,
         attempt: 0,
-        elapsedMs: this.#now() - startedAt,
+        elapsedMs: this.#elapsed(startedAt),
       });
     }
     return lock;
@@ -177,7 +180,7 @@ export class Locker {
           await this.#acquireWithRetry({ key: this.#fullKey(key), ...normalized }, deadline),
         );
       }
-      await Promise.all(locks.map((lock) => lock.extend(normalized.ttl)));
+      await this.#refreshSet(locks, normalized.ttl, startedAt, deadline);
       return new LockSet(locks, (event) => this.#emit(event));
     } catch (error) {
       await Promise.all(locks.map((lock) => this.#releaseQuietly(lock)));
@@ -187,6 +190,10 @@ export class Locker {
 
   #fullKey(key: string): string {
     return this.#keyPrefix + key;
+  }
+
+  #elapsed(since: number): number {
+    return Math.round(this.#now() - since);
   }
 
   #normalize(options: NormalizeInput, maxHoldRequired: boolean): Normalized {
@@ -214,11 +221,24 @@ export class Locker {
     let previousDelay = 0;
     for (;;) {
       signal?.throwIfAborted();
+      if (deadline !== undefined && this.#now() >= deadline) {
+        throw new LockHeldError({
+          key,
+          attempts: attempt,
+          elapsedMs: this.#elapsed(startedAt),
+          reason: 'timeout',
+        });
+      }
       const lock = await this.#attempt(prepared, startedAt, attempt + 1);
       if (lock) {
+        if (signal?.aborted) {
+          // The caller cancelled while the backend was answering. The lock is not wanted.
+          await this.#releaseQuietly(lock);
+          throw signal.reason;
+        }
         return lock;
       }
-      const elapsedMs = this.#now() - startedAt;
+      const elapsedMs = this.#elapsed(startedAt);
       this.#emit({ type: 'contended', key, ttl, attempt, elapsedMs });
       if (attempt >= retry.retries) {
         throw new LockHeldError({ key, attempts: attempt + 1, elapsedMs, reason: 'retries' });
@@ -257,7 +277,7 @@ export class Locker {
     if (!acquired) {
       return null;
     }
-    const elapsedMs = this.#now() - requestedAt;
+    const elapsedMs = this.#elapsed(requestedAt);
     if (elapsedMs >= ttl) {
       // The answer came after the lease could have ended, so the lock is not usable.
       // Give the key back so the next caller does not wait for the expiry.
@@ -279,8 +299,41 @@ export class Locker {
       emit: (event) => this.#emit(event),
       heartbeat: prepared.heartbeat,
     });
-    this.#emit({ type: 'acquired', key, ttl, waitedMs: this.#now() - startedAt, attempts });
+    this.#emit({ type: 'acquired', key, ttl, waitedMs: this.#elapsed(startedAt), attempts });
     return lock;
+  }
+
+  /** Gives every lease of the set a fresh TTL. An earlier lease that already ran out fails the set. */
+  async #refreshSet(
+    locks: Lock[],
+    ttl: number,
+    startedAt: number,
+    deadline: number | undefined,
+  ): Promise<void> {
+    const lastKey = locks.at(-1)?.key ?? '';
+    if (deadline !== undefined && this.#now() >= deadline) {
+      throw new LockHeldError({
+        key: lastKey,
+        attempts: locks.length,
+        elapsedMs: this.#elapsed(startedAt),
+        reason: 'timeout',
+      });
+    }
+    const results = await Promise.allSettled(locks.map((lock) => lock.extend(ttl)));
+    const failed = results.findIndex((result) => result.status === 'rejected');
+    if (failed !== -1) {
+      const failure = results[failed];
+      const lock = locks[failed];
+      if (failure?.status === 'rejected' && !(failure.reason instanceof LockLostError)) {
+        throw failure.reason;
+      }
+      throw new LockHeldError({
+        key: lock?.key ?? lastKey,
+        attempts: locks.length,
+        elapsedMs: this.#elapsed(startedAt),
+        reason: 'expired',
+      });
+    }
   }
 
   async #releaseQuietly(lock: Lock): Promise<void> {

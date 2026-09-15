@@ -26,7 +26,7 @@ export type MongoLikeClient = {
 export type MongoAdapterOptions = {
   client: MongoLikeClient;
   dbName?: string;
-  /** Default 'locco-locks'. */
+  /** Default 'locco-locks'. Named `locksCollectionName` in 1.x. */
   collectionName?: string;
   /** Create the two indexes on first use. Default true. Set false when the role has no rights for it. */
   createIndexes?: boolean;
@@ -52,12 +52,13 @@ export class MongoAdapter implements LockAdapter {
   readonly #createIndexes: boolean;
   #indexes: Promise<void> | undefined;
 
-  constructor({
-    client,
-    dbName,
-    collectionName = 'locco-locks',
-    createIndexes = true,
-  }: MongoAdapterOptions) {
+  constructor(options: MongoAdapterOptions) {
+    if ('locksCollectionName' in options) {
+      throw new TypeError(
+        'locksCollectionName was renamed to collectionName in 2.0. The old name would send the locks to the default collection.',
+      );
+    }
+    const { client, dbName, collectionName = 'locco-locks', createIndexes = true } = options;
     this.#collection = client.db(dbName).collection(collectionName);
     this.#createIndexes = createIndexes;
   }
@@ -66,11 +67,12 @@ export class MongoAdapter implements LockAdapter {
     await this.#ensureIndexes();
     // `$expr` is not allowed in the filter of an upsert, so the filter is the key alone and the
     // pipeline decides whether the lease is over. The returned document tells who holds it.
+    // In a pipeline a string that starts with `$` is a field path, so the values go in `$literal`.
     const update: Pipeline = [
       {
         $set: {
-          key,
-          uniqueValue: { $cond: [EXPIRED, token, '$uniqueValue'] },
+          key: { $literal: key },
+          uniqueValue: { $cond: [EXPIRED, { $literal: token }, '$uniqueValue'] },
           expireAt: { $cond: [EXPIRED, { $add: ['$$NOW', ttl] }, '$expireAt'] },
         },
       },

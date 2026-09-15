@@ -15,7 +15,13 @@ export class LoccoError extends Error {
   }
 }
 
-export type LockHeldReason = 'retries' | 'timeout';
+export type LockHeldReason = 'retries' | 'timeout' | 'expired';
+
+const HELD_MESSAGES: Record<LockHeldReason, string> = {
+  retries: 'the retry budget ran out',
+  timeout: 'the timeout ran out',
+  expired: "an earlier key's lease ran out before the whole set was acquired",
+};
 
 export class LockHeldError extends LoccoError {
   readonly key: string;
@@ -29,9 +35,8 @@ export class LockHeldError extends LoccoError {
     elapsedMs: number;
     reason: LockHeldReason;
   }) {
-    const budget = params.reason === 'timeout' ? 'the timeout' : 'the retry budget';
     super(
-      `Lock "${params.key}" is held by another holder. ${budget} ran out after ${params.attempts} attempt(s) in ${params.elapsedMs} ms.`,
+      `Lock "${params.key}" could not be acquired: ${HELD_MESSAGES[params.reason]} after ${params.attempts} attempt(s) in ${params.elapsedMs} ms.`,
       { code: 'LOCK_HELD' },
     );
     this.name = 'LockHeldError';
@@ -42,7 +47,13 @@ export class LockHeldError extends LoccoError {
   }
 }
 
-export type LockLostReason = 'release' | 'extend' | 'late-extend' | 'expired' | 'max-hold';
+export type LockLostReason =
+  | 'release'
+  | 'extend'
+  | 'late-extend'
+  | 'expired'
+  | 'max-hold'
+  | 'observed';
 
 const LOSS_MESSAGES: Record<LockLostReason, string> = {
   release: 'the key was gone or belonged to another holder at release',
@@ -50,6 +61,7 @@ const LOSS_MESSAGES: Record<LockLostReason, string> = {
   'late-extend': 'the extend answer arrived after the new lease had already run out',
   expired: 'the lease ran out before an extension refreshed it',
   'max-hold': 'the hold deadline passed',
+  observed: 'a check found the key gone or owned by another holder',
 };
 
 export class LockLostError extends LoccoError {

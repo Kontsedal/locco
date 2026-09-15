@@ -13,6 +13,7 @@ describe('PostgresAdapter', () => {
   afterAll(async () => {
     await pool.query('DROP TABLE IF EXISTS "locco_test_locks"');
     await pool.query('DROP TABLE IF EXISTS "locco_test_sweep"');
+    await pool.query('DROP TABLE IF EXISTS "excluded"');
     await pool.end();
   });
 
@@ -65,6 +66,16 @@ describe('PostgresAdapter', () => {
       () => new PostgresAdapter({ client: pool, tableName: 'public.locco_locks' }),
     ).not.toThrow();
     expect(postgresLocksDdl('public.locco_locks')).toContain('"public"."locco_locks"');
+  });
+
+  it('works with a table named after the EXCLUDED pseudo-relation', async () => {
+    const adapter = new PostgresAdapter({ client: pool, tableName: 'excluded' });
+    const key = uniqueKey();
+    await expect(adapter.acquire({ key, token: 'a', ttl: 100 })).resolves.toBe(true);
+    await expect(adapter.acquire({ key, token: 'b', ttl: 100 })).resolves.toBe(false);
+    await sleep(150);
+    await expect(adapter.acquire({ key, token: 'b', ttl: 5000 })).resolves.toBe(true);
+    await expect(adapter.release({ key, token: 'b' })).resolves.toBe(true);
   });
 
   it('sweeps the rows whose lease is over and keeps the live ones', async () => {

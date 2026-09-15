@@ -28,6 +28,13 @@ describe('MongoAdapter', () => {
     expect(collection.createIndex).toHaveBeenCalledWith({ expireAt: 1 }, { expireAfterSeconds: 0 });
   });
 
+  it('rejects the 1.x option name instead of sending locks to the default collection', () => {
+    const client = clientFor(fakeCollection());
+    expect(() => new MongoAdapter({ client, locksCollectionName: 'x' } as never)).toThrow(
+      /renamed to collectionName/,
+    );
+  });
+
   it('skips index creation when told to', async () => {
     const collection = fakeCollection();
     const adapter = new MongoAdapter({ client: clientFor(collection), createIndexes: false });

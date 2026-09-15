@@ -29,6 +29,8 @@ export function runLockAdapterContract(
   const ttl = options.ttl ?? 300;
   const racers = options.racers ?? 40;
   const afterExpiry = ttl + Math.max(50, Math.floor(ttl / 4));
+  // A race must not take longer than the lease, or a second winner is legitimate.
+  const raceTtl = Math.max(ttl * 20, 10_000);
 
   describe(`${name} lock adapter contract`, () => {
     let subject: AdapterUnderTest;
@@ -104,10 +106,22 @@ export function runLockAdapterContract(
       await expect(adapter.acquire({ key: k, token: token(), ttl })).resolves.toBe(false);
     });
 
-    it('does not extend a key another token holds', async () => {
+    it('sets a shorter lease from now, not from the old expiry', async () => {
       const k = key();
-      await adapter.acquire({ key: k, token: token(), ttl });
+      const t = token();
+      await adapter.acquire({ key: k, token: t, ttl: ttl * 3 });
+      await expect(adapter.extend({ key: k, token: t, ttl })).resolves.toBe(true);
+      await sleep(afterExpiry);
+      await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(false);
+      await expect(adapter.acquire({ key: k, token: token(), ttl })).resolves.toBe(true);
+    });
+
+    it('does not extend a key another token holds, and keeps that holder', async () => {
+      const k = key();
+      const t = token();
+      await adapter.acquire({ key: k, token: t, ttl });
       await expect(adapter.extend({ key: k, token: token(), ttl })).resolves.toBe(false);
+      await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(true);
     });
 
     it('does not extend a key whose lease ran out', async () => {
@@ -129,12 +143,37 @@ export function runLockAdapterContract(
       await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(false);
     });
 
-    it('lets exactly one of many concurrent acquires win', async () => {
+    it('lets exactly one of many concurrent acquires win a free key', async () => {
       const k = key();
       const results = await Promise.all(
-        Array.from({ length: racers }, () => adapter.acquire({ key: k, token: token(), ttl })),
+        Array.from({ length: racers }, () =>
+          adapter.acquire({ key: k, token: token(), ttl: raceTtl }),
+        ),
       );
       expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('lets exactly one of many concurrent acquires take over an expired key', async () => {
+      const k = key();
+      await adapter.acquire({ key: k, token: token(), ttl });
+      await sleep(afterExpiry);
+      const results = await Promise.all(
+        Array.from({ length: racers }, () =>
+          adapter.acquire({ key: k, token: token(), ttl: raceTtl }),
+        ),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('stores a key and a token verbatim, including a key that starts with $', async () => {
+      const k = `$$NOW:${key()}`;
+      const t = `$${token()}`;
+      await expect(adapter.acquire({ key: k, token: t, ttl })).resolves.toBe(true);
+      await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(true);
+      await expect(adapter.acquire({ key: k, token: token(), ttl })).resolves.toBe(false);
+      await expect(adapter.extend({ key: k, token: t, ttl })).resolves.toBe(true);
+      await expect(adapter.release({ key: k, token: t })).resolves.toBe(true);
+      await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(false);
     });
 
     it('keeps keys independent', async () => {

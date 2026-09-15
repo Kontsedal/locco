@@ -48,11 +48,11 @@ export class PostgresAdapter implements LockAdapter {
   async acquire({ key, token, ttl }: LockLeaseParams): Promise<boolean> {
     await this.#ensureTable();
     const result = await this.#client.query(
-      `INSERT INTO ${this.#table} (key, value, expires_at)
+      `INSERT INTO ${this.#table} AS locks (key, value, expires_at)
        VALUES ($1, $2, ${LEASE_END})
        ON CONFLICT (key) DO UPDATE
          SET value = EXCLUDED.value, expires_at = ${LEASE_END}
-         WHERE ${this.#table}.expires_at <= clock_timestamp()
+         WHERE locks.expires_at <= clock_timestamp()
        RETURNING key`,
       [key, token, ttl],
     );

@@ -49,7 +49,7 @@ export function assertRetry(retry: unknown): asserts retry is RetryOptions | und
   }
   if (delay !== undefined && typeof delay !== 'function' && !isDelayValue(delay)) {
     throw new ValidationError(
-      'retry.delay must be a number of milliseconds of 0 or more, or a function',
+      `retry.delay must be a number of milliseconds from 0 to ${MAX_DURATION_MS}, or a function`,
     );
   }
   if (timeout !== undefined) {
@@ -58,7 +58,9 @@ export function assertRetry(retry: unknown): asserts retry is RetryOptions | und
 }
 
 export function isDelayValue(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DURATION_MS
+  );
 }
 
 export type NormalizedAutoExtend = {

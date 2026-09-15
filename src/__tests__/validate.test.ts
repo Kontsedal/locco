@@ -58,6 +58,9 @@ describe('validate', () => {
     expect(() => assertRetry({ delay: -1 })).toThrow(ValidationError);
     expect(() => assertRetry({ delay: 'x' })).toThrow(ValidationError);
     expect(() => assertRetry({ timeout: 0 })).toThrow(ValidationError);
+    expect(() => assertRetry({ delay: MAX_DURATION_MS + 1 })).toThrow(ValidationError);
+    expect(() => assertRetry({ delay: MAX_DURATION_MS })).not.toThrow();
+    expect(() => assertRetry({ delay: 12.5 })).not.toThrow();
   });
 
   it('assertAutoExtend enforces the interval margin and the hold deadline', () => {

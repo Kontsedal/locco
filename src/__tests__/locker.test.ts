@@ -30,19 +30,41 @@ function setup(options: Partial<LockerOptions> = {}) {
   return { adapter, events, locker, types };
 }
 
-/** Wraps an adapter so one method answers only after `ms` of fake time. */
-function slowAdapter(adapter: LockAdapter, method: 'acquire' | 'extend', ms: number): LockAdapter {
-  return {
+type SlowMethod = 'acquire' | 'extend';
+
+/** Wraps an adapter so one method answers only after `ms` of fake time. `calls` limits it to the first calls. */
+function slowAdapter(adapter: LockAdapter, method: SlowMethod, ms: number, calls = Infinity) {
+  let remaining = calls;
+  const slow: LockAdapter = {
     acquire: (p) => adapter.acquire(p),
     release: (p) => adapter.release(p),
     extend: (p) => adapter.extend(p),
     isHeld: (p) => adapter.isHeld(p),
     [method]: async (p: never) => {
       const answer = await adapter[method](p);
-      await wait(ms);
+      if (remaining > 0) {
+        remaining -= 1;
+        await wait(ms);
+      }
       return answer;
     },
   };
+  return slow;
+}
+
+function slowSetup(method: SlowMethod, ms: number, calls = Infinity) {
+  const memory = new InMemoryAdapter({ now: () => Date.now() });
+  const adapter = slowAdapter(memory, method, ms, calls);
+  const events: LockEvent[] = [];
+  const locker = new Locker({
+    adapter,
+    now: () => Date.now(),
+    retry: { retries: 0 },
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  return { memory, adapter, locker, events };
 }
 
 beforeEach(() => {
@@ -62,6 +84,21 @@ describe('Locker constructor', () => {
     expect(() => new Locker({ adapter, keyPrefix: 1 as never })).toThrow(ValidationError);
     expect(() => new Locker({ adapter, onEvent: 'x' as never })).toThrow(ValidationError);
     expect(() => new Locker({ adapter })).not.toThrow();
+  });
+
+  it('uses a monotonic clock by default', async () => {
+    vi.useRealTimers();
+    const locker = new Locker({ adapter: new InMemoryAdapter() });
+    const before = Date.now;
+    Date.now = () => before() - 3_600_000;
+    try {
+      const lock = await locker.acquire('k', { ttl: 50 });
+      expect(lock.state).toBe('held');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(lock.state).toBe('lost');
+    } finally {
+      Date.now = before;
+    }
   });
 });
 
@@ -117,8 +154,7 @@ describe('acquire', () => {
     const second = await pending;
     expect(second.state).toBe('held');
     expect(types().filter((type) => type === 'contended')).toHaveLength(2);
-    const acquired = types().lastIndexOf('acquired');
-    expect(acquired).toBe(types().length - 1);
+    expect(types().at(-1)).toBe('acquired');
   });
 
   it('throws LockHeldError when the retry budget is spent', async () => {
@@ -162,6 +198,20 @@ describe('acquire', () => {
     await expect(failure).resolves.toMatchObject({ message: 'cancelled' });
   });
 
+  it('gives the key back when the caller aborted while the attempt was winning', async () => {
+    const { memory, adapter, locker } = slowSetup('acquire', 100);
+    const release = vi.spyOn(adapter, 'release');
+    const controller = new AbortController();
+    const pending = locker.acquire('k', { ttl: TTL, signal: controller.signal });
+    const failure = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(50);
+    controller.abort(new Error('cancelled'));
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(failure).resolves.toMatchObject({ message: 'cancelled' });
+    expect(release).toHaveBeenCalledTimes(1);
+    await expect(memory.acquire({ key: 'k', token: 'other', ttl: TTL })).resolves.toBe(true);
+  });
+
   it('feeds the delay function with attempt, elapsed time and the previous delay', async () => {
     const { locker } = setup();
     await locker.acquire('k', { ttl: TTL });
@@ -183,14 +233,24 @@ describe('acquire', () => {
   });
 
   it('treats an answer that arrives after the lease as a failed attempt and gives the key back', async () => {
-    const memory = new InMemoryAdapter({ now: () => Date.now() });
-    const slow = slowAdapter(memory, 'acquire', 150);
-    const release = vi.spyOn(slow, 'release');
-    const locker = new Locker({ adapter: slow, now: () => Date.now(), retry: { retries: 0 } });
+    const { adapter, locker } = slowSetup('acquire', 150);
+    const release = vi.spyOn(adapter, 'release');
     const pending = locker.tryAcquire('k', { ttl: 100 });
     await vi.advanceTimersByTimeAsync(200);
     await expect(pending).resolves.toBeNull();
     expect(release).toHaveBeenCalledWith({ key: 'k', token: expect.any(String) });
+  });
+
+  it('continues the retry loop after a late answer and wins on a later attempt', async () => {
+    const { adapter, locker, events } = slowSetup('acquire', 150, 1);
+    const release = vi.spyOn(adapter, 'release');
+    const pending = locker.acquire('k', { ttl: 100, retry: { retries: 2, delay: 10 } });
+    // The first answer lands at 150 ms, the second attempt wins at 160 ms and lives until 260 ms.
+    await vi.advanceTimersByTimeAsync(200);
+    const lock = await pending;
+    expect(lock.state).toBe('held');
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.type === 'acquired')).toMatchObject({ attempts: 2 });
   });
 });
 
@@ -216,14 +276,39 @@ describe('Lock', () => {
     await expect(lock.release()).resolves.toBe(false);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(types()).toEqual(['acquired', 'released']);
+    expect(lock.lostReason).toBeUndefined();
   });
 
-  it('reports a release that found the key not ours', async () => {
+  it('reports a release that found the key not ours and aborts the signal', async () => {
     const { adapter, locker, events } = setup();
     const lock = await locker.acquire('k', { ttl: TTL });
     await adapter.release({ key: 'k', token: lock.token });
     await expect(lock.release()).resolves.toBe(false);
+    expect(lock.state).toBe('released');
+    expect(lock.lostReason).toBe('release');
+    expect(lock.signal.aborted).toBe(true);
     expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'release' });
+  });
+
+  it('keeps its state when the backend throws on release, so a later call tries again', async () => {
+    const { adapter, locker } = setup();
+    const lock = await locker.acquire('k', { ttl: TTL });
+    const spy = vi.spyOn(adapter, 'release').mockRejectedValueOnce(new Error('redis down'));
+    await expect(lock.release()).rejects.toThrow('redis down');
+    expect(lock.state).toBe('held');
+    await expect(lock.release()).resolves.toBe(true);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(lock.state).toBe('released');
+  });
+
+  it('shares one in-flight release between concurrent callers', async () => {
+    const { adapter, locker } = setup();
+    const lock = await locker.acquire('k', { ttl: TTL });
+    const spy = vi.spyOn(adapter, 'release');
+    const [first, second] = await Promise.all([lock.release(), lock.release()]);
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('extends the lease, resets the local expiry and reports it', async () => {
@@ -261,16 +346,46 @@ describe('Lock', () => {
   });
 
   it('marks the lock lost when the extend answer arrives after the new lease', async () => {
+    // The clock jumps inside the adapter call, so no timer fires before the answer is handled.
     const memory = new InMemoryAdapter({ now: () => Date.now() });
-    const locker = new Locker({
-      adapter: slowAdapter(memory, 'extend', 150),
-      now: () => Date.now(),
+    const adapter: LockAdapter = {
+      acquire: (p) => memory.acquire(p),
+      release: (p) => memory.release(p),
+      isHeld: (p) => memory.isHeld(p),
+      extend: async (p) => {
+        const answer = await memory.extend(p);
+        vi.setSystemTime(Date.now() + 150);
+        return answer;
+      },
+    };
+    const locker = new Locker({ adapter, now: () => Date.now(), retry: { retries: 0 } });
+    const lock = await locker.acquire('k', { ttl: TTL });
+    await expect(lock.extend(100)).rejects.toMatchObject({
+      code: 'LOCK_LOST',
+      reason: 'late-extend',
     });
+    expect(lock.state).toBe('lost');
+  });
+
+  it('rejects a manual extend whose answer arrives after the local lease ran out', async () => {
+    const { locker } = slowSetup('extend', 150);
+    const lock = await locker.acquire('k', { ttl: 200 });
+    await vi.advanceTimersByTimeAsync(100);
+    const pending = lock.extend(1000).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST', reason: 'expired' });
+    expect(lock.state).toBe('lost');
+  });
+
+  it('shortens the local estimate before a shorter extension is answered', async () => {
+    const { locker } = slowSetup('extend', 150);
     const lock = await locker.acquire('k', { ttl: TTL });
     const pending = lock.extend(100).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(200);
-    await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST', reason: 'late-extend' });
+    await vi.advanceTimersByTimeAsync(120);
     expect(lock.state).toBe('lost');
+    expect(lock.lostReason).toBe('expired');
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST' });
   });
 
   it('marks the lock lost and rethrows when the backend throws on extend', async () => {
@@ -294,12 +409,15 @@ describe('Lock', () => {
     expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'expired', heldMs: 300 });
   });
 
-  it('answers isHeld from the backend', async () => {
+  it('answers isHeld from the backend and marks a lost lock', async () => {
     const { adapter, locker } = setup();
     const lock = await locker.acquire('k', { ttl: TTL });
     await expect(lock.isHeld()).resolves.toBe(true);
     await adapter.release({ key: 'k', token: lock.token });
     await expect(lock.isHeld()).resolves.toBe(false);
+    expect(lock.state).toBe('lost');
+    expect(lock.lostReason).toBe('observed');
+    expect(lock.signal.aborted).toBe(true);
   });
 
   it('releases through Symbol.asyncDispose', async () => {
@@ -310,15 +428,13 @@ describe('Lock', () => {
   });
 
   it('releases at block exit with await using', async () => {
-    const { locker } = setup();
-    let token = '';
+    const { locker, types } = setup();
     {
       await using lock = await locker.acquire('k', { ttl: TTL });
-      token = lock.token;
       expect(lock.state).toBe('held');
     }
+    expect(types()).toEqual(['acquired', 'released']);
     await expect(locker.tryAcquire('k', { ttl: TTL })).resolves.not.toBeNull();
-    expect(token).not.toBe('');
   });
 });
 
@@ -344,6 +460,18 @@ describe('autoExtend', () => {
     expect(spy).toHaveBeenCalledTimes(4);
   });
 
+  it('does not let a queued heartbeat undo a manual extension', async () => {
+    const { adapter, locker } = setup();
+    const spy = vi.spyOn(adapter, 'extend');
+    const lock = await locker.acquire('k', { ttl: 300, autoExtend: { maxHold: 10_000 } });
+    await vi.advanceTimersByTimeAsync(50);
+    await lock.extend(1000);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(lock.ttl).toBe(1000);
+    expect(spy.mock.calls.slice(1).every(([params]) => params.ttl === 1000)).toBe(true);
+    expect(spy.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it('marks the lock lost and aborts the signal when an extension fails', async () => {
     const { adapter, locker, events } = setup();
     const lock = await locker.acquire('k', { ttl: 300, autoExtend: { maxHold: 10_000 } });
@@ -366,6 +494,18 @@ describe('autoExtend', () => {
     expect(lock.signal.reason).toMatchObject({ code: 'LOCK_MAX_HOLD' });
     expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'max-hold' });
     await expect(adapter.isHeld({ key: 'k', token: lock.token })).resolves.toBe(false);
+  });
+
+  it('clamps a manual extension to the hold deadline', async () => {
+    const { adapter, locker } = setup();
+    const lock = await locker.acquire('k', { ttl: 100, autoExtend: { maxHold: 250 } });
+    await lock.extend(10_000);
+    expect(lock.ttl).toBe(250);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(lock.state).toBe('lost');
+    expect(lock.lostReason).toBe('max-hold');
+    await expect(adapter.isHeld({ key: 'k', token: lock.token })).resolves.toBe(false);
+    await expect(lock.extend(100)).rejects.toMatchObject({ code: 'LOCK_MAX_HOLD' });
   });
 
   it('rejects an interval that is not smaller than the ttl and a deadline under the ttl', async () => {
@@ -520,23 +660,63 @@ describe('acquireMany', () => {
     await expect(locker.tryAcquire('a', { ttl: TTL })).resolves.not.toBeNull();
   });
 
+  it('does not start a later key after the deadline passed during an earlier attempt', async () => {
+    const { memory, locker } = slowSetup('acquire', 150, 1);
+    const pending = locker.acquireMany(['a', 'b'], { ttl: TTL, retry: { timeout: 100 } });
+    const failure = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(failure).resolves.toMatchObject({
+      code: 'LOCK_HELD',
+      reason: 'timeout',
+      key: 'b',
+    });
+    await expect(memory.acquire({ key: 'a', token: 'other', ttl: TTL })).resolves.toBe(true);
+  });
+
+  it('fails the set when an earlier lease ran out before the last key was acquired', async () => {
+    const { locker } = setup();
+    const blocker = await locker.acquire('b', { ttl: TTL });
+    const pending = locker.acquireMany(['a', 'b'], {
+      ttl: 200,
+      retry: { retries: 10, delay: 100 },
+    });
+    const failure = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(250);
+    await blocker.release();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(failure).resolves.toMatchObject({
+      code: 'LOCK_HELD',
+      reason: 'expired',
+      key: 'a',
+    });
+    await expect(locker.tryAcquire('b', { ttl: TTL })).resolves.not.toBeNull();
+  });
+
   it('validates the keys', async () => {
     const { locker } = setup();
     await expect(locker.acquireMany([], { ttl: TTL })).rejects.toThrow(ValidationError);
   });
 
-  it('releases every lock at block exit and aborts the set signal with any member', async () => {
-    const { adapter, locker } = setup();
-    let firstToken = '';
+  it('releases every lock at block exit', async () => {
+    const { locker, types } = setup();
     {
-      await using locks = await locker.acquireMany(['a', 'b'], { ttl: 200 });
-      const [first] = locks.locks;
-      firstToken = first?.token ?? '';
-      expect(locks.signal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(200);
-      expect(locks.signal.aborted).toBe(true);
+      await using locks = await locker.acquireMany(['a', 'b'], { ttl: TTL });
+      expect(locks.locks).toHaveLength(2);
     }
-    await expect(adapter.isHeld({ key: 'a', token: firstToken })).resolves.toBe(false);
+    expect(types().filter((type) => type === 'released')).toHaveLength(2);
+    await expect(locker.tryAcquire('a', { ttl: TTL })).resolves.not.toBeNull();
+    await expect(locker.tryAcquire('b', { ttl: TTL })).resolves.not.toBeNull();
+  });
+
+  it('aborts the set signal when any member is lost', async () => {
+    const { adapter, locker } = setup();
+    const locks = await locker.acquireMany(['a', 'b'], { ttl: TTL });
+    expect(locks.signal.aborted).toBe(false);
+    const [first] = locks.locks;
+    await adapter.release({ key: 'a', token: first?.token ?? '' });
+    await expect(first?.isHeld()).resolves.toBe(false);
+    expect(locks.signal.aborted).toBe(true);
+    await locks.release();
   });
 
   it('extends every lock in the set', async () => {
