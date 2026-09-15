@@ -1,59 +1,179 @@
 {
   "name": "@kontsedal/locco",
-  "version": "1.1.0",
+  "version": "2.0.0-beta.1",
+  "description": "Distributed locks for Node.js with Redis, MongoDB, Postgres and in-memory adapters",
   "keywords": [
     "lock",
-    "distributed locks",
-    "redlock",
-    "mongo",
-    "redis"
+    "distributed lock",
+    "mutex",
+    "lease",
+    "redis",
+    "ioredis",
+    "mongodb",
+    "postgres"
   ],
   "license": "MIT",
   "author": "Bohdan Kontsedal <kontsedalbohdan@gmail.com>",
-  "description": "Distributed locks library",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kontsedal/locco.git"
+  },
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./redis": {
+      "import": {
+        "types": "./dist/redis.d.ts",
+        "default": "./dist/redis.js"
+      },
+      "require": {
+        "types": "./dist/redis.d.cts",
+        "default": "./dist/redis.cjs"
+      }
+    },
+    "./node-redis": {
+      "import": {
+        "types": "./dist/node-redis.d.ts",
+        "default": "./dist/node-redis.js"
+      },
+      "require": {
+        "types": "./dist/node-redis.d.cts",
+        "default": "./dist/node-redis.cjs"
+      }
+    },
+    "./mongo": {
+      "import": {
+        "types": "./dist/mongo.d.ts",
+        "default": "./dist/mongo.js"
+      },
+      "require": {
+        "types": "./dist/mongo.d.cts",
+        "default": "./dist/mongo.cjs"
+      }
+    },
+    "./postgres": {
+      "import": {
+        "types": "./dist/postgres.d.ts",
+        "default": "./dist/postgres.js"
+      },
+      "require": {
+        "types": "./dist/postgres.d.cts",
+        "default": "./dist/postgres.cjs"
+      }
+    },
+    "./memory": {
+      "import": {
+        "types": "./dist/memory.d.ts",
+        "default": "./dist/memory.js"
+      },
+      "require": {
+        "types": "./dist/memory.d.cts",
+        "default": "./dist/memory.cjs"
+      }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "require": {
+        "types": "./dist/testing.d.cts",
+        "default": "./dist/testing.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "redis": [
+        "./dist/redis.d.ts"
+      ],
+      "node-redis": [
+        "./dist/node-redis.d.ts"
+      ],
+      "mongo": [
+        "./dist/mongo.d.ts"
+      ],
+      "postgres": [
+        "./dist/postgres.d.ts"
+      ],
+      "memory": [
+        "./dist/memory.d.ts"
+      ],
+      "testing": [
+        "./dist/testing.d.ts"
+      ]
     }
   },
-  "files": [
-    "dist"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Kontsedal/locco.git"
-  },
   "scripts": {
-    "clean": "del-cli dist",
-    "build": "npm run clean && tsup src/index.ts --format cjs,esm --dts --clean --outDir dist",
-    "type:check": "tsc -p tsconfig.json --noEmit",
-    "compose": "docker-compose up",
+    "build": "tsup",
+    "type:check": "tsc -p tsconfig.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "test": "vitest",
     "test:run": "vitest run",
-    "lint": "biome check src --ext .ts",
-    "lint:fix": "biome check --apply src --ext .ts",
-    "publish:package": "npm run build && release-it"
+    "test:coverage": "vitest run --coverage",
+    "check:package": "publint && attw --pack .",
+    "compose": "docker compose up -d"
+  },
+  "peerDependencies": {
+    "ioredis": ">=5",
+    "mongodb": ">=5",
+    "pg": ">=8",
+    "redis": ">=4",
+    "vitest": ">=1"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    },
+    "mongodb": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "redis": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/jest": "^30.0.0",
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@biomejs/biome": "^2.5.13",
     "@types/node": "^25.0.3",
-    "biome": "^0.3.3",
-    "del-cli": "^7.0.0",
+    "@types/pg": "^8.23.1",
+    "@vitest/coverage-v8": "^4.1.11",
     "ioredis": "5.8.2",
+    "locco-v1": "npm:@kontsedal/locco@1.0.0",
     "mongodb": "7.0.0",
-    "prettier": "3.7.4",
-    "release-it": "^19.2.2",
+    "pg": "^8.23.0",
+    "publint": "^0.3.24",
+    "redis": "^6.2.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "4.0.16"
-  },
-  "engines": {
-    "node": ">=18"
+    "vitest": "^4.1.11"
   }
 }

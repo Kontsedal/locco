@@ -1,229 +1,69 @@
-import { describe, expect, it, vi } from "vitest";
-import { normalizeDelay, normalizeDelays } from "./utils/delays";
-import { RetrySettings, retry } from "../utils/retry";
-import { RetryError, ValidationError } from "../errors";
+import { describe, expect, it } from 'vitest';
+import { ValidationError } from '../errors';
+import { DEFAULT_RETRY, exponentialBackoff, mergeRetry, wait } from '../retry';
 
-describe("Retry helper", () => {
-  it("should retry on error specified times", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    try {
-      await retry({
-        settings: {
-          retryTimes: 10,
-          retryDelay: 1,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    expect(fn).toHaveBeenCalledTimes(10);
+describe('mergeRetry', () => {
+  it('starts from the built-in default', () => {
+    expect(mergeRetry()).toEqual(DEFAULT_RETRY);
+    expect(mergeRetry(undefined, undefined)).toEqual(DEFAULT_RETRY);
   });
 
-  it("should retry with a provided delay", async () => {
-    const delays: number[] = [];
-    const startedAt = Date.now();
-    const fn = vi.fn().mockImplementation(() => {
-      delays.push(Date.now() - startedAt);
-      return Promise.reject(new Error());
-    });
-    try {
-      await retry({
-        settings: {
-          retryTimes: 5,
-          retryDelay: 50,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    const expectedDelays = [0, 50, 100, 150, 200];
-    expect(normalizeDelays(expectedDelays, delays)).toEqual(
-      expect.arrayContaining(expectedDelays)
-    );
-  });
-  it("should not retry if shouldProceedFn decided so", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    try {
-      await retry({
-        settings: {
-          retryTimes: 5,
-          retryDelay: 10,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => false,
-      });
-    } catch (error) {}
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-  it("should not retry if an operation was successful", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.resolve());
-    try {
-      await retry({
-        settings: {
-          retryTimes: 5,
-          retryDelay: 10,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  it("should not retry if retry was manually stopped", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    try {
-      await retry({
-        settings: {
-          retryDelayFn: ({ attemptNumber, stop }) => {
-            if (attemptNumber === 3) {
-              stop();
-            }
-            return 10;
-          },
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    expect(fn).toHaveBeenCalledTimes(4);
-  });
-
-  it("should stop retry on provided timeout", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    const startedAt = Date.now();
-    const timeout = 200;
-    try {
-      await retry({
-        settings: {
-          retryTimes: 100,
-          retryDelay: 10,
-          totalTime: timeout,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    const timeDiff = Date.now() - startedAt;
-    expect(normalizeDelay(timeout, timeDiff)).toBe(timeout);
-  });
-
-  it("should not allow invalid settings", () => {
-    const fn = vi.fn().mockImplementation(() => Promise.resolve());
-    const params = {
-      fn: fn as () => Promise<void>,
-      shouldProceedFn: () => true,
-    };
-    const badSettings = [
-      {},
-      { retryTimes: 20 },
-      { retryTimes: "20" },
-      { retryDelay: 20 },
-      { retryDelay: "20" },
-      { retryTimes: 20.4, retryDelay: 20 },
-      { retryTimes: 20, retryDelay: 20.4 },
-      { retryTimes: "20", retryDelay: 20 },
-      { retryTimes: 20, retryDelay: "20" },
-      { retryDelayFn: () => 100, retryDelay: 20 },
-      { retryDelayFn: "???" },
-      { totalTime: 2000.2 },
-      { totalTime: "2000" },
-    ];
-    const goodSettings = [
-      { retryTimes: 20, retryDelay: 100 },
-      { retryTimes: 20, retryDelay: 100, totalTime: 5000 },
-      { retryDelayFn: () => 100 },
-      { retryDelayFn: () => 100, totalTime: 5000 },
-      { retryDelayFn: () => 100, totalTime: 5000, retryTimes: 20 },
-    ];
-    badSettings.forEach((settings) => {
-      expect(() =>
-        retry({ ...params, settings: settings as RetrySettings })
-      ).toThrow(ValidationError);
-    });
-    goodSettings.forEach((settings) => {
-      expect(() =>
-        retry({ ...params, settings: settings as RetrySettings })
-      ).not.toThrow();
+  it('lets a later layer override one field and keep the others', () => {
+    expect(mergeRetry({ retries: 3 }, { delay: 50 })).toEqual({ retries: 3, delay: 50 });
+    expect(mergeRetry({ retries: 3, delay: 10 }, { retries: 0 })).toEqual({
+      retries: 0,
+      delay: 10,
     });
   });
 
-  it("should support async retryDelayFn", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    try {
-      await retry({
-        settings: {
-          retryDelayFn: async () => {
-            return 10;
-          },
-          retryTimes: 3,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    expect(fn).toHaveBeenCalledTimes(3);
+  it('carries timeout and a delay function through', () => {
+    const delay = () => 5;
+    expect(mergeRetry({ timeout: 1000 }, { delay })).toEqual({ retries: 10, delay, timeout: 1000 });
+  });
+});
+
+describe('exponentialBackoff', () => {
+  it('doubles from base and stops at max without jitter', async () => {
+    const delay = exponentialBackoff({ base: 100, max: 500, jitter: false });
+    const context = { elapsedMs: 0, previousDelay: 0 };
+    expect(await delay({ attempt: 0, ...context })).toBe(100);
+    expect(await delay({ attempt: 1, ...context })).toBe(200);
+    expect(await delay({ attempt: 2, ...context })).toBe(400);
+    expect(await delay({ attempt: 3, ...context })).toBe(500);
   });
 
-  it("should support totalTime with retryDelayFn", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
+  it('keeps a jittered delay inside the upper half', async () => {
+    const delay = exponentialBackoff({ base: 100, max: 5000 });
+    for (let i = 0; i < 50; i += 1) {
+      const value = await delay({ attempt: 2, elapsedMs: 0, previousDelay: 0 });
+      expect(value).toBeGreaterThanOrEqual(200);
+      expect(value).toBeLessThanOrEqual(400);
+    }
+  });
+
+  it('rejects a bad base or max', () => {
+    expect(() => exponentialBackoff({ base: 0 })).toThrow(ValidationError);
+    expect(() => exponentialBackoff({ max: -1 })).toThrow(ValidationError);
+  });
+});
+
+describe('wait', () => {
+  it('resolves after the delay', async () => {
     const startedAt = Date.now();
-    const timeout = 100;
-    try {
-      await retry({
-        settings: {
-          retryDelayFn: () => 10,
-          totalTime: timeout,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      });
-    } catch (error) {}
-    const timeDiff = Date.now() - startedAt;
-    expect(normalizeDelay(timeout, timeDiff)).toBe(timeout);
+    await wait(20);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15);
   });
 
-  it("should re-throw original error when shouldProceedFn returns false", async () => {
-    const originalError = new Error("specific error");
-    const fn = vi.fn().mockImplementation(() => Promise.reject(originalError));
-    await expect(
-      retry({
-        settings: {
-          retryTimes: 5,
-          retryDelay: 10,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => false,
-      })
-    ).rejects.toBe(originalError);
+  it('rejects with the signal reason when aborted', async () => {
+    const controller = new AbortController();
+    const pending = wait(10_000, controller.signal);
+    controller.abort(new Error('stop'));
+    await expect(pending).rejects.toThrow('stop');
   });
 
-  it("should throw RetryError with descriptive message on retry times limit", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    await expect(
-      retry({
-        settings: {
-          retryTimes: 2,
-          retryDelay: 1,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      })
-    ).rejects.toThrow("Reached retry times limit");
-  });
-
-  it("should throw RetryError with descriptive message on total time exceeded", async () => {
-    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error()));
-    await expect(
-      retry({
-        settings: {
-          retryTimes: 1000,
-          retryDelay: 1,
-          totalTime: 10,
-        },
-        fn: fn as () => Promise<void>,
-        shouldProceedFn: () => true,
-      })
-    ).rejects.toThrow("Total time exceeded");
+  it('rejects at once when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('early'));
+    await expect(wait(10, controller.signal)).rejects.toThrow('early');
   });
 });
