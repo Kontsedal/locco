@@ -1,374 +1,396 @@
-[![Build and Test](https://github.com/kontsedal/locco/workflows/Build%20and%20Test/badge.svg)](https://github.com/kontsedal/locco/actions/workflows/status.yml?query=branch%3Amain++)
-![Coverage Badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Kontsedal/e0ad01840d30efd4c1766e5ba5845567/raw/bf778a4aa5262997514945e024aa6722d5f72016/locco__heads_main.json)
+[![Build and Test](https://github.com/kontsedal/locco/workflows/Build%20and%20Test/badge.svg)](https://github.com/kontsedal/locco/actions/workflows/status.yml?query=branch%3Amain)
+[![npm](https://img.shields.io/npm/v/@kontsedal/locco)](https://www.npmjs.com/package/@kontsedal/locco)
 
 # locco
 
-A small, zero-dependency library for distributed locking. Supports Redis ([ioredis](https://github.com/redis/ioredis)), MongoDB, and in-memory backends. You provide your own client instances — locco has no runtime dependencies.
+Distributed locks for Node.js. One `Locker`, five backends: Redis through `ioredis` or `redis`,
+MongoDB, Postgres, and memory for tests. You bring the client. The package has no runtime
+dependencies.
 
-## Features
+A lock is a lease: a key in the backend that carries a random token and expires after `ttl`
+milliseconds. Only the holder of the token can release or extend it. locco tells you when a lease
+is lost, instead of letting the work run on unprotected.
 
-- **Three backends** — Redis, MongoDB, and in-memory (for testing)
-- **Zero runtime dependencies** — adapters use duck-typed interfaces, no client packages bundled
-- **Atomic operations** — Redis uses Lua scripts; MongoDB uses upsert with unique indexes
-- **Automatic release** — pass a callback to `acquire()` and the lock is released in a `finally` block
-- **Configurable retry** — fixed delay, total time cap, or fully custom delay function
-- **Fencing tokens** — every lock carries a unique value; release/extend only succeed if the value matches
-- **Dual package** — ships both ESM and CommonJS builds with full TypeScript declarations
+## What you get
 
-## Table of contents
+- **Three ways to hold a lock.** `acquire` for manual control, `withLock` for a scoped callback,
+  `acquireMany` for a set of keys.
+- **`await using`.** A `Lock` is an `AsyncDisposable`, so the runtime releases it at block exit.
+- **Retries with a budget.** A count, a delay or a delay function, and a timeout on the whole
+  acquisition. The options merge per field with the locker default.
+- **Auto-extension with a hard deadline.** A heartbeat extends the lease, and `maxHold` caps how
+  long the lock can live, so a forgotten lock still expires.
+- **A loss signal.** `lock.signal` is an `AbortSignal` that aborts when the lease is lost.
+  `withLock` throws `LockLostError` when the work finished without a lock.
+- **Errors with codes.** Contention is one error, `LockHeldError`. A driver error passes through
+  untouched.
+- **Events.** One hook receives every acquire, contention, extension, release and loss, with the
+  hold time and the wait time.
+- **A contract test suite** for your own adapter.
 
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [API](#api)
-  - [Locker](#locker)
-  - [Lock](#lock)
-  - [Retry settings](#retry-settings)
-- [Adapters](#adapters)
-  - [Redis adapter](#redis-adapter)
-  - [MongoDB adapter](#mongodb-adapter)
-  - [In-memory adapter](#in-memory-adapter)
-- [Error handling](#error-handling)
-- [How it works](#how-it-works)
-  - [Redis internals](#redis-internals)
-  - [MongoDB internals](#mongodb-internals)
-- [Requirements](#requirements)
-- [License](#license)
-
-## Installation
+## Install
 
 ```shell
 npm i @kontsedal/locco
 ```
 
+Add the driver for your backend: `ioredis`, `redis`, `mongodb` or `pg`.
+
 ## Quick start
 
-### Manual acquire and release
+```ts
+import Redis from 'ioredis';
+import { Locker } from '@kontsedal/locco';
+import { IoRedisAdapter } from '@kontsedal/locco/redis';
 
-Lock a resource, do work, then release manually. Always release in a `finally` block to avoid dangling locks.
-
-```typescript
-import { Locker, IoRedisAdapter } from "@kontsedal/locco";
-import Redis from "ioredis";
-
-const adapter = new IoRedisAdapter({ client: new Redis() });
 const locker = new Locker({
-  adapter,
-  retrySettings: { retryDelay: 200, retryTimes: 10 },
+  adapter: new IoRedisAdapter({ client: new Redis() }),
+  retry: { retries: 10, delay: 200 },
 });
 
-const lock = await locker.lock("user:123", 3000).acquire();
+async function settleOrder(orderId: string) {
+  await using lock = await locker.acquire(`order:${orderId}`, { ttl: 30_000 });
+  // The runtime releases the lock when this function returns or throws.
+  await settle(orderId, { signal: lock.signal });
+}
+```
+
+Without `await using`:
+
+```ts
+const lock = await locker.acquire('order:1', { ttl: 30_000 });
 try {
-  // critical section
-  await lock.extend(2000); // need more time? extend the TTL
-  // continue working
+  await settle('1');
 } finally {
   await lock.release();
 }
 ```
 
-### Callback-based (auto-release)
+Fail fast when another holder has the key:
 
-Pass a callback to `acquire()` and the lock is released automatically when the callback finishes (or throws).
-
-```typescript
-import { Locker, MongoAdapter } from "@kontsedal/locco";
-import { MongoClient } from "mongodb";
-
-const adapter = new MongoAdapter({
-  client: new MongoClient("mongodb://localhost:27017"),
-});
-const locker = new Locker({
-  adapter,
-  retrySettings: { retryDelay: 200, retryTimes: 10 },
-});
-
-const result = await locker.lock("user:123", 3000).acquire(async (lock) => {
-  // critical section — lock is auto-released when this function returns
-  await lock.extend(2000);
-  return { success: true };
-});
-
-console.log(result); // { success: true }
-```
-
-### In-memory (for testing)
-
-```typescript
-import { Locker, InMemoryAdapter } from "@kontsedal/locco";
-
-const locker = new Locker({
-  adapter: new InMemoryAdapter(),
-  retrySettings: { retryDelay: 50, retryTimes: 5 },
-});
-
-const lock = await locker.lock("resource:1", 1000).acquire();
-// ...
-await lock.release();
-```
-
-## API
-
-### Locker
-
-Factory that creates `Lock` instances bound to a backend adapter and default retry settings.
-
-```typescript
-const locker = new Locker({ adapter, retrySettings });
-```
-
-**Constructor parameters:**
-
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `adapter` | `ILockAdapter` | Yes | Backend adapter (Redis, MongoDB, or in-memory) |
-| `retrySettings` | `RetrySettings` | Yes | Default retry behavior for all locks created by this locker |
-
-**Methods:**
-
-#### `locker.lock(key, ttl)`
-
-Creates a `Lock` instance. Does **not** acquire the lock — call `.acquire()` on the returned object.
-
-- `key` — a non-empty string identifying the resource to lock
-- `ttl` — time to live in milliseconds (positive integer)
-
-```typescript
-const lock = locker.lock("orders:456", 5000);
-```
-
----
-
-### Lock
-
-Represents a single lock on a resource. Created via `locker.lock()`.
-
-#### `lock.acquire()`
-
-Acquires the lock. Retries according to the retry settings if the resource is already locked.
-
-```typescript
-// Without callback — returns the Lock; you must release manually
-const lock = await locker.lock("key", 3000).acquire();
-
-// With callback — auto-releases when the callback finishes
-const result = await locker.lock("key", 3000).acquire(async (lock) => {
-  return doWork();
-});
-```
-
-#### `lock.release(options?)`
-
-Releases the lock. By default, silently succeeds even if the lock has already expired or was taken by another process. Pass `{ throwOnFail: true }` to throw on failure.
-
-```typescript
-await lock.release();
-await lock.release({ throwOnFail: true }); // throws LockReleaseError on failure
-```
-
-#### `lock.extend(ttl)`
-
-Extends the lock's TTL by the given number of milliseconds **from now**. Throws `LockExtendError` if the lock is no longer valid.
-
-```typescript
-await lock.extend(5000); // lock is now valid for 5 more seconds
-```
-
-#### `lock.isLocked()`
-
-Returns `true` if this specific lock is still valid in the backend.
-
-```typescript
-if (await lock.isLocked()) {
-  // still holding the lock
+```ts
+const lock = await locker.tryAcquire('nightly-report', { ttl: 60_000 });
+if (!lock) {
+  return; // another instance runs the report
 }
 ```
 
-#### `lock.setRetrySettings(settings)`
+Run a callback under a lock that extends itself:
 
-Returns a **new** `Lock` with overridden retry settings. Must be called **before** `acquire()`.
-
-```typescript
-const lock = await locker
-  .lock("key", 3000)
-  .setRetrySettings({ retryDelay: 100, retryTimes: 50 })
-  .acquire();
+```ts
+const report = await locker.withLock(
+  'nightly-report',
+  { ttl: 60_000, autoExtend: true },
+  async (lock) => buildReport({ signal: lock.signal }),
+);
 ```
 
-#### Public properties
+Lock several keys at once:
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `key` | `string` | The resource key |
-| `ttl` | `number` | The lock TTL in milliseconds |
-| `uniqueValue` | `string` | The fencing token (hex string) |
-| `retrySettings` | `RetrySettings` | Current retry settings |
+```ts
+await using locks = await locker.acquireMany(['account:1', 'account:2'], { ttl: 10_000 });
+await transfer('1', '2');
+```
 
----
+## Guarantees and limits
 
-### Retry settings
+**What the lock guarantees.** While the lease is live, no other caller can acquire the key. The
+backend deletes or extends the key only when the token matches, so a holder cannot release or
+extend another holder's lock. Every backend operation is one atomic statement: `SET NX PX` and Lua
+on Redis, a pipeline upsert on MongoDB, `INSERT ... ON CONFLICT` on Postgres.
 
-Controls how `acquire()` retries when a resource is already locked.
+**What locco detects.** A release that finds the key not ours returns `false` and fires a `lost`
+event. An extension that finds the key not ours marks the lock `lost` and aborts `lock.signal`. A
+lease that runs out with no extension does the same, on the holder's own clock. `withLock` throws
+`LockLostError` when the callback finished but the lock was lost.
 
-| Parameter | Type | Description |
-| --- | --- | --- |
-| `retryDelay` | `number` | Milliseconds between retries (positive integer) |
-| `retryTimes` | `number` | Maximum number of retry attempts (positive integer) |
-| `totalTime` | `number` | Hard cap on total retry duration in milliseconds |
-| `retryDelayFn` | `function` | Custom delay function (see below). Mutually exclusive with `retryDelay` |
+**What no lease lock survives.** Read this before you protect a money-moving write with a lock.
 
-When using a fixed delay, both `retryDelay` and `retryTimes` are required. You can optionally add `totalTime` as an additional safeguard.
+- **A pause after the signal fires.** A process that stops for garbage collection or a page fault
+  after it checked `signal.aborted` can still write after the lease ended. Where an overlapping
+  write is unacceptable, the write itself needs a condition, such as a version check.
+- **A clock that is not the backend's.** Redis expires the key on its own clock. MongoDB and
+  Postgres compare on the server clock, through `$$NOW` and `clock_timestamp()`. The local expiry
+  estimate counts elapsed time on the holder's machine and needs no shared clock.
+- **Redis eviction.** Under memory pressure Redis can evict a lock key. Run the lock Redis with
+  `maxmemory-policy noeviction`.
+- **Redis failover.** A single Redis that fails over to a replica can forget an acknowledged
+  lock. locco locks one Redis and is not a Redlock quorum.
+- **A slow answer.** An acquire or extend answer that arrives after the lease has run out is
+  treated as a failure, not as a lock.
 
-**Custom delay function:**
+**Not reentrant.** A second `acquire` of the same key from the same process waits like any other
+caller. Pass the held `Lock` to the code that needs it.
 
-```typescript
+## API
+
+### `new Locker(options)`
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `adapter` | `LockAdapter` | required | The backend. |
+| `retry` | `RetryOptions` | `{ retries: 10, delay: 200 }` | Default retry policy. Each call can override a field. |
+| `keyPrefix` | `string` | `''` | Prepended to every key. Use it to keep test workers apart. |
+| `onEvent` | `(event: LockEvent) => void` | none | Receives every event. What it throws is dropped. |
+| `now` | `() => number` | `Date.now` | The clock. Tests replace it. |
+
+### `locker.acquire(key, options)`
+
+Returns a held `Lock`. Retries while another holder has the key. Throws `LockHeldError` when the
+retry budget or the timeout runs out.
+
+| Option | Type | Meaning |
+|---|---|---|
+| `ttl` | `number` | Lease length in milliseconds. Required. |
+| `retry` | `RetryOptions` | Overrides for this call. |
+| `signal` | `AbortSignal` | Stops the retry loop. `acquire` throws `signal.reason`. |
+| `autoExtend` | `{ interval?, maxHold }` | Heartbeat. `maxHold` is required here. See below. |
+
+### `locker.tryAcquire(key, { ttl, autoExtend? })`
+
+One attempt. Returns the `Lock`, or `null` when another holder has the key. A driver error throws.
+
+### `locker.withLock(key, options, fn)`
+
+Acquires, runs `fn(lock)`, releases. `autoExtend` may be `true`, or `{ interval?, maxHold? }`. The
+outcome follows one order:
+
+1. `fn` threw. That error is thrown. A release error after it goes to a `releaseFailed` event.
+2. `fn` returned and the lock is lost, or the release found the key not ours. `LockLostError` is
+   thrown with `completed: true` and the return value in `result`.
+3. `fn` returned and the release threw. The driver error is thrown.
+4. The return value of `fn` is returned.
+
+### `locker.acquireMany(keys, options)`
+
+Deduplicates and sorts the keys, then acquires them one by one, so two callers with overlapping
+sets cannot deadlock. `retry.timeout` is one budget for the whole set. Every lease is refreshed
+before the set is returned, so the leases overlap. When one key fails, every acquired lock is
+released and the error is thrown.
+
+Returns a `LockSet` with `locks`, `signal`, `release()`, `extend(ttl)` and `Symbol.asyncDispose`.
+
+### Retry options
+
+| Field | Type | Meaning |
+|---|---|---|
+| `retries` | `number` | Attempts after the first one. `0` is one attempt. `Infinity` runs until `timeout` or the signal. |
+| `delay` | `number` or `DelayFn` | Milliseconds between attempts. May be `0`. |
+| `timeout` | `number` | Cap on the whole acquisition, waits included. No attempt starts after it. |
+
+The fields merge in three layers: the built-in default, the `Locker` option, the call option.
+`lock.retry` shows the merged result.
+
+```ts
+import { exponentialBackoff } from '@kontsedal/locco';
+
 const locker = new Locker({
-  adapter: new InMemoryAdapter(),
-  retrySettings: {
-    retryDelayFn: ({ attemptNumber, startedAt, previousDelay, settings, stop }) => {
-      // Exponential backoff
-      return Math.min(2 ** attemptNumber * 50, 5000);
-    },
-  },
+  adapter,
+  retry: { retries: 8, delay: exponentialBackoff({ base: 100, max: 5000 }) },
 });
 ```
 
-The function receives:
+A `DelayFn` receives `{ attempt, elapsedMs, previousDelay }` and returns milliseconds, or a promise
+of them.
 
-| Parameter | Type | Description |
-| --- | --- | --- |
-| `attemptNumber` | `number` | Zero-based attempt index |
-| `startedAt` | `number` | Timestamp (ms) when retrying began |
-| `previousDelay` | `number` | The delay returned on the previous attempt |
-| `settings` | `RetrySettings` | The full retry settings object |
-| `stop` | `() => void` | Call to stop retrying immediately (throws `RetryError`) |
+### Auto-extension
 
-## Adapters
+`autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and the
+interval must be smaller than the TTL. The timer does not keep the process alive.
 
-All adapters implement the `ILockAdapter` interface. You can write your own by implementing four methods: `createLock`, `releaseLock`, `extendLock`, and `isValidLock`.
+`maxHold` is a hard deadline on ownership, counted from acquisition. The last extension is clamped
+so the lease ends at the deadline, and at the deadline `lock.signal` aborts with a `LOCK_MAX_HOLD`
+reason. On `acquire`, `maxHold` is required. On `withLock` it is optional, because the callback
+scope ends the hold.
 
-### Redis adapter
+When an extension fails, throws, or answers after the new lease has run out, the heartbeat stops,
+the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
 
-```typescript
-import { IoRedisAdapter } from "@kontsedal/locco";
-import Redis from "ioredis";
+### `Lock`
 
-const adapter = new IoRedisAdapter({ client: new Redis() });
-```
+| Member | Meaning |
+|---|---|
+| `key`, `token`, `ttl`, `retry` | Read-only. `key` includes the prefix. `ttl` is the latest lease length. |
+| `state` | `'held'`, `'lost'` or `'released'`. Loss is sticky until `release()`. |
+| `lostReason` | Why the lock is lost, or `undefined`. |
+| `signal` | Aborts on every known loss. Pass it to the work. |
+| `release()` | `true` when it deleted our key, `false` when the key was gone or not ours. Throws only when the driver throws. A second call returns `false`. |
+| `extend(ttl)` | New lease from now. Throws `LockLostError` when the key was not ours. |
+| `isHeld()` | One observation of the backend. |
+| `[Symbol.asyncDispose]()` | Calls `release()`. |
 
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `client` | ioredis-compatible | Yes | Any object with `set`, `get`, and `defineCommand` methods |
+### Errors
 
-The adapter registers two Lua commands (`releaseLock` and `extendLock`) on the client at construction time to ensure atomic compare-and-delete/extend operations.
+Every class extends `LoccoError`, which extends `Error` and carries a stable `code`. A driver
+error is not wrapped. It reaches you as the driver threw it.
 
-### MongoDB adapter
+| Class | `code` | When |
+|---|---|---|
+| `LockHeldError` | `LOCK_HELD` | Another holder has the key and the budget is spent. Carries `key`, `attempts`, `elapsedMs`, `reason`. |
+| `LockLostError` | `LOCK_LOST` | The lease was lost. Carries `key`, `reason`, and from `withLock` also `completed` and `result`. |
+| `LockStateError` | `LOCK_STATE` | `extend` on a released lock. |
+| `LoccoError` | `LOCK_MAX_HOLD` | The abort reason on `lock.signal` at the hold deadline. |
+| `ValidationError` | `LOCK_VALIDATION` | A wrong argument. |
 
-```typescript
-import { MongoAdapter } from "@kontsedal/locco";
-import { MongoClient } from "mongodb";
-
-const adapter = new MongoAdapter({
-  client: new MongoClient("mongodb://localhost:27017"),
-  dbName: "my-app",               // optional
-  locksCollectionName: "my-locks", // optional, defaults to "locco-locks"
-});
-```
-
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `client` | mongodb-compatible | Yes | Any object matching the `MongoLikeClient` interface |
-| `dbName` | `string` | No | Database name passed to `client.db()` |
-| `locksCollectionName` | `string` | No | Collection name (default: `"locco-locks"`) |
-
-Indexes are created lazily and idempotently on first use.
-
-### In-memory adapter
-
-```typescript
-import { InMemoryAdapter } from "@kontsedal/locco";
-
-const adapter = new InMemoryAdapter();
-```
-
-No configuration needed. Uses a `Map` internally with `setTimeout` for TTL expiration. Timers call `.unref()` so they don't prevent Node.js from exiting.
-
-Useful for unit tests where you don't want external dependencies.
-
-## Error handling
-
-All errors extend `LoccoError`, which extends `Error`. You can catch specific error types using `instanceof`.
-
-```typescript
-import {
-  LoccoError,
-  LockCreateError,
-  LockReleaseError,
-  LockExtendError,
-  RetryError,
-  ValidationError,
-} from "@kontsedal/locco";
-
+```ts
 try {
-  const lock = await locker.lock("key", 3000).acquire();
+  await using lock = await locker.acquire('k', { ttl: 5000 });
 } catch (error) {
-  if (error instanceof RetryError) {
-    // could not acquire the lock within the retry limits
-  } else if (error instanceof ValidationError) {
-    // invalid parameters (e.g., negative TTL, missing retryDelay)
+  if (error instanceof LockHeldError) {
+    // busy, come back later
+  } else {
+    throw error; // the driver failed
   }
 }
 ```
 
-| Error class | When it's thrown |
-| --- | --- |
-| `LockCreateError` | Backend reports the resource is already locked (this is the error `retry` catches and retries on) |
-| `LockReleaseError` | Lock is expired or owned by another process (`release({ throwOnFail: true })`) |
-| `LockExtendError` | Lock is expired or owned by another process when extending |
-| `RetryError` | Retry limit, total time, or manual `stop()` exceeded during `acquire()` |
-| `ValidationError` | Invalid parameters passed to any public method |
+### Events
 
-## How it works
+`onEvent` receives one object per event. Every event carries `key` and `ttl`.
 
-### Redis internals
+| `type` | Extra fields | When |
+|---|---|---|
+| `acquired` | `waitedMs`, `attempts` | A lock was taken. |
+| `contended` | `attempt`, `elapsedMs` | An attempt found another holder. |
+| `extended` | `heldMs` | A lease was extended. |
+| `released` | `heldMs` | Our key was deleted. |
+| `lost` | `heldMs`, `reason` | The lease was lost. |
+| `releaseFailed` | `heldMs`, `error` | A cleanup release threw while another error was in flight. |
 
-Lock creation uses the Redis `SET` command with two options:
+`heldMs` against `ttl` tells you when a TTL is too short. `waitedMs` tells you how contended a key
+is.
 
-- **NX** — only set the key if it does **not** already exist
-- **PX** — set an expiration in milliseconds
+## Adapters
 
-```
-SET <key> <uniqueValue> PX <ttl> NX
-```
+Each adapter is its own entry point, so your bundle carries one driver's types only.
 
-If the key already exists (another lock is active), `SET` returns `null` and the acquire fails (triggering a retry). If the key doesn't exist, it's created atomically with the given TTL.
+### Redis with ioredis
 
-Release and extend use Lua scripts to atomically check the stored value and either delete the key or reset its TTL. This guarantees that a lock can only be released or extended by the process that created it.
+```ts
+import Redis from 'ioredis';
+import { IoRedisAdapter } from '@kontsedal/locco/redis';
 
-### MongoDB internals
-
-Locks are stored in a collection with three fields: `key`, `uniqueValue`, and `expireAt`. A unique index on `key` prevents duplicate locks.
-
-To create a lock, the adapter uses `updateOne` with `upsert: true`:
-
-```typescript
-collection.updateOne(
-  { key, expireAt: { $lt: new Date() } }, // only match expired locks
-  { $set: { key, uniqueValue, expireAt } },
-  { upsert: true }
-);
+const adapter = new IoRedisAdapter({ client: new Redis() });
 ```
 
-If a valid (non-expired) lock exists, the filter doesn't match it, so MongoDB tries to insert a new document — which fails due to the unique index. This makes lock creation atomic without transactions.
+Acquire is `SET key token PX ttl NX`. Release and extend are Lua scripts sent with `EVALSHA`, with
+a fallback to `EVAL` when the script cache is empty. The adapter registers nothing on the client,
+so several adapters can share one client. Run the lock Redis with `maxmemory-policy noeviction`.
 
-A TTL index on `expireAt` with `expireAfterSeconds: 0` lets MongoDB automatically clean up expired lock documents.
+### Redis with node-redis
 
-Release and extend use the same pattern: they match on both `key` and `uniqueValue` to ensure only the lock owner can modify or delete the lock.
+```ts
+import { createClient } from 'redis';
+import { NodeRedisAdapter } from '@kontsedal/locco/node-redis';
+
+const client = createClient();
+await client.connect();
+const adapter = new NodeRedisAdapter({ client });
+```
+
+Same keys and same scripts as the ioredis adapter. The two adapters can share one Redis.
+
+### MongoDB
+
+```ts
+import { MongoClient } from 'mongodb';
+import { MongoAdapter } from '@kontsedal/locco/mongo';
+
+const client = new MongoClient('mongodb://localhost:27017');
+const adapter = new MongoAdapter({ client, dbName: 'app', collectionName: 'locco-locks' });
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `dbName` | the client's default | Passed to `client.db()`. |
+| `collectionName` | `'locco-locks'` | Where the documents live. |
+| `createIndexes` | `true` | Create the unique index on `key` and the TTL index on `expireAt` on first use. |
+
+One document per key: `key`, `uniqueValue`, `expireAt`. Expiry is compared on the server clock
+through `$$NOW`. Acquire is a pipeline upsert on `key`, so it is atomic without a transaction. The
+TTL index removes expired documents in the background. Needs MongoDB 4.2 or newer.
+
+### Postgres
+
+```ts
+import { Pool } from 'pg';
+import { PostgresAdapter } from '@kontsedal/locco/postgres';
+
+const adapter = new PostgresAdapter({ client: new Pool(), tableName: 'locco_locks' });
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `tableName` | `'locco_locks'` | Plain or schema-qualified identifier. |
+| `createTable` | `true` | Run `CREATE TABLE IF NOT EXISTS` on first use. |
+
+Pass a `Pool`, or a `Client` that is not inside a transaction. Inside a transaction the lock row is
+invisible to others until commit, rolls back with it, and holds a row lock until commit. The
+adapter cannot detect that.
+
+Every statement uses `clock_timestamp()`, the server clock. Acquire is one `INSERT ... ON CONFLICT
+DO UPDATE ... WHERE expires_at <= clock_timestamp()`. When another transaction holds the row, the
+statement waits for it, and the retry timeout cannot cut that wait. Set `lock_timeout` on the
+connection to bound it.
+
+Postgres has no TTL index. An expired row stays until the next acquire of the same key overwrites
+it. Call `sweepExpired()` on a schedule to remove them:
+
+```ts
+setInterval(() => adapter.sweepExpired().catch(report), 60_000).unref();
+```
+
+Or with `pg_cron`: `SELECT cron.schedule('locco-sweep', '* * * * *', $$DELETE FROM locco_locks WHERE expires_at <= clock_timestamp()$$);`
+
+For a role without DDL rights, set `createTable: false` and run the statement from
+`postgresLocksDdl(tableName)` in your migration. Needs Postgres 9.5 or newer.
+
+### In-memory
+
+```ts
+import { InMemoryAdapter } from '@kontsedal/locco/memory';
+
+const adapter = new InMemoryAdapter();
+```
+
+One process only. `clear()` forgets every lock. `now` in the options replaces the clock, so tests
+can use fake timers.
+
+## Write your own adapter
+
+An adapter answers `true` when the operation applied to our key and `false` when another holder,
+or no holder, had it. It throws only what its driver throws.
+
+```ts
+import type { LockAdapter } from '@kontsedal/locco';
+
+export class MyAdapter implements LockAdapter {
+  async acquire({ key, token, ttl }) { /* set key=token with expiry ttl if absent or expired */ }
+  async release({ key, token }) { /* delete key if it carries token */ }
+  async extend({ key, token, ttl }) { /* set a new expiry if key carries token */ }
+  async isHeld({ key, token }) { /* does key carry token and a live expiry */ }
+}
+```
+
+Run the same contract suite the built-in adapters pass, in a vitest file:
+
+```ts
+import { runLockAdapterContract } from '@kontsedal/locco/testing';
+
+runLockAdapterContract('MyAdapter', () => ({ adapter: new MyAdapter() }));
+```
+
+## Migrating from 1.x
+
+See [docs/migrating-to-v2.md](docs/migrating-to-v2.md). The Redis keys and the MongoDB documents
+are unchanged, so 1.x and 2.x processes can share one backend during a rolling deploy.
 
 ## Requirements
 
-- Node.js >= 18
-- **Redis adapter:** [ioredis](https://github.com/redis/ioredis) (or any compatible client)
-- **MongoDB adapter:** [mongodb](https://github.com/mongodb/node-mongodb-native) driver (or any compatible client)
+- Node.js 22 or newer.
+- TypeScript 5.2 or newer for `await using`. CommonJS has no top-level `await`, so write it inside
+  an async function.
+- One of: `ioredis` 5+, `redis` 4+, `mongodb` 5+, `pg` 8+.
 
 ## License
 

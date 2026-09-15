@@ -1,0 +1,30 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type:check
+      - run: npm run build
+      - run: npm run check:package
+      # The tests run on every push to main. A tag publishes what main already tested.
+      - run: npm publish --provenance --access public
+        env:
+          # Not needed once npm trusted publishing is enabled for this repository.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
