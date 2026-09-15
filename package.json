@@ -24,7 +24,8 @@
     "node": ">=22"
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts/codemod-v1-to-v2.mjs"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -138,7 +139,7 @@
   },
   "peerDependencies": {
     "ioredis": ">=5",
-    "mongodb": ">=5",
+    "mongodb": ">=5.7",
     "pg": ">=8",
     "redis": ">=4",
     "vitest": ">=1"
@@ -175,5 +176,8 @@
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
+  },
+  "bin": {
+    "locco-migrate-v2": "./scripts/codemod-v1-to-v2.mjs"
   }
 }

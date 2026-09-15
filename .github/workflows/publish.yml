@@ -11,6 +11,26 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6380:6379
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27018:27017
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,12 +39,29 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
+      - name: Check that the tag matches package.json
+        run: |
+          VERSION="$(npm pkg get version | tr -d '"')"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $VERSION."
+            exit 1
+          fi
       - run: npm run lint
       - run: npm run type:check
+      - run: npm run test:run
       - run: npm run build
       - run: npm run check:package
-      # The tests run on every push to main. A tag publishes what main already tested.
-      - run: npm publish --provenance --access public
+      - name: Pick the dist-tag
+        id: dist
+        # npm 11 refuses to publish a prerelease without an explicit tag. 2.0.0-beta.1 goes to "beta".
+        run: |
+          VERSION="$(npm pkg get version | tr -d '"')"
+          case "$VERSION" in
+            *-*) TAG="${VERSION#*-}"; TAG="${TAG%%.*}" ;;
+            *) TAG="latest" ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - run: npm publish --provenance --access public --tag "${{ steps.dist.outputs.tag }}"
         env:
           # Not needed once npm trusted publishing is enabled for this repository.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

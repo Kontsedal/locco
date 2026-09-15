@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Rewrites the one literal 1.x call shape to 2.0 and reports every site it did not touch.
-//   node scripts/codemod-v1-to-v2.mjs [--write] <file>...
+//   npx -p @kontsedal/locco locco-migrate-v2 [--write] <file>...
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -8,11 +8,12 @@ const write = args.includes('--write');
 const files = args.filter((arg) => arg !== '--write');
 
 if (files.length === 0 || args.includes('--help') || args.includes('-h')) {
-  console.error('usage: node scripts/codemod-v1-to-v2.mjs [--write] <file>...');
+  console.error('usage: locco-migrate-v2 [--write] <file>...');
   process.exit(2);
 }
 
 const MANUAL_PATTERNS = [
+  ['.lock(', 'a Locker.lock() call the codemod did not rewrite'],
   ['retryDelayFn', 'retryDelayFn: the context fields changed and stop() is gone'],
   ['setRetrySettings', 'setRetrySettings that the codemod did not rewrite'],
   ['uniqueValue', 'uniqueValue is now token'],
@@ -24,6 +25,7 @@ const MANUAL_PATTERNS = [
   ['LockExtendError', 'extend() throws LockLostError'],
   ['ILockAdapter', 'the interface is LockAdapter and its methods return booleans'],
   ['retrySettings', 'the Locker option is now retry'],
+  ['locksCollectionName', 'the MongoAdapter option is now collectionName'],
 ];
 
 let rewritten = 0;
@@ -51,26 +53,42 @@ if (!write && rewritten > 0) {
   console.log('Run again with --write to change the files.');
 }
 
+/** Walks the code and skips strings and comments, so text inside them is never rewritten. */
 function rewrite(source) {
   let output = '';
-  let index = 0;
+  let copied = 0;
   let count = 0;
-  for (;;) {
-    const start = source.indexOf('.lock(', index);
-    if (start === -1) {
-      output += source.slice(index);
-      break;
-    }
-    const site = parseSite(source, start);
-    if (!site) {
-      output += source.slice(index, start + 6);
-      index = start + 6;
+  let i = 0;
+  while (i < source.length) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', i);
+      i = end === -1 ? source.length : end;
       continue;
     }
-    output += source.slice(index, start) + site.replacement;
-    index = site.end;
-    count += 1;
+    if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      i = endOfString(source, i);
+      continue;
+    }
+    if (source.startsWith('.lock(', i)) {
+      const site = parseSite(source, i);
+      if (site) {
+        output += source.slice(copied, i) + site.replacement;
+        copied = site.end;
+        i = site.end;
+        count += 1;
+        continue;
+      }
+    }
+    i += 1;
   }
+  output += source.slice(copied);
   return { output, count };
 }
 
@@ -156,6 +174,35 @@ function findManual(source) {
     }
   });
   return report;
+}
+
+/** Returns the index after the string that opens at `start`. A template's `${}` is skipped whole. */
+function endOfString(source, start) {
+  const quote = source[start];
+  for (let i = start + 1; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === '\\') {
+      i += 1;
+      continue;
+    }
+    if (char === quote) {
+      return i + 1;
+    }
+    if (quote === '`' && char === '$' && source[i + 1] === '{') {
+      let depth = 0;
+      for (i += 1; i < source.length; i += 1) {
+        if (source[i] === '{') {
+          depth += 1;
+        } else if (source[i] === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return source.length;
 }
 
 /** Returns the text inside the parentheses that open at `open`, and the index after the close. */
