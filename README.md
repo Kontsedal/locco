@@ -177,7 +177,7 @@ Returns a `LockSet` with `locks`, `signal`, `release()`, `extend(ttl)` and `Symb
 |---|---|---|
 | `retries` | `number` | Attempts after the first one. `0` is one attempt. `Infinity` runs until `timeout` or the signal. |
 | `delay` | `number` or `DelayFn` | Milliseconds between attempts. May be `0`. |
-| `timeout` | `number` | Cap on the whole acquisition, waits included. No attempt starts after it. |
+| `timeout` | `number` | Budget for the acquisition, waits included. No attempt or wait starts after it. An attempt that is already in flight may finish later. |
 
 The fields merge in three layers: the built-in default, the `Locker` option, the call option.
 `lock.retry` shows the merged result.
@@ -199,12 +199,12 @@ of them.
 `autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and the
 interval must be smaller than the TTL. The timer does not keep the process alive.
 
-`maxHold` is a hard deadline on ownership, counted from acquisition. Every extension, manual or
-from the heartbeat, is clamped so the lease ends at the deadline, and at the deadline
-`lock.signal` aborts with a `LOCK_MAX_HOLD` reason. The lease can outlive the deadline by at most
-the network latency of the last extension, because the backend counts the TTL from the moment it
-handles the request. On `acquire`, `maxHold` is required. On `withLock` it is optional, because
-the callback scope ends the hold.
+`maxHold` is a deadline on ownership, counted from acquisition. Every extension, manual or from
+the heartbeat, is clamped so the local lease ends at the deadline, and at the deadline
+`lock.signal` aborts with a `LOCK_MAX_HOLD` reason. The backend counts its TTL from the moment it
+handles the request, so the backend lease can outlive the deadline by the time the last extension
+spent in flight, in queues and in the backend. On `acquire`, `maxHold` is required. On `withLock`
+it is optional, because the callback scope ends the hold.
 
 When an extension fails, throws, or answers after the new lease has run out, the heartbeat stops,
 the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
@@ -390,10 +390,10 @@ runLockAdapterContract('MyAdapter', () => ({ adapter: new MyAdapter() }));
 
 See [docs/migrating-to-v2.md](docs/migrating-to-v2.md). The Redis keys and the MongoDB documents
 are unchanged, so 1.x and 2.x processes can share one backend during a rolling deploy. A codemod
-ships with the package:
+ships with the package. After you install 2.0, run it from your project:
 
 ```shell
-npx -p @kontsedal/locco locco-migrate-v2 --write src/**/*.ts
+npx locco-migrate-v2 --write src/**/*.ts
 ```
 
 ## Requirements
@@ -401,7 +401,7 @@ npx -p @kontsedal/locco locco-migrate-v2 --write src/**/*.ts
 - Node.js 22 or newer.
 - TypeScript 5.2 or newer for `await using`. CommonJS has no top-level `await`, so write it inside
   an async function.
-- One of: `ioredis` 5+, `redis` 4+, `mongodb` 5+, `pg` 8+.
+- One of: `ioredis` 5+, `redis` 4+, `mongodb` 5.7+, `pg` 8+.
 
 ## License
 

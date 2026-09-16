@@ -74,14 +74,17 @@ into
 .acquire(KEY, { ttl: TTL, retry: { retries: N - 1, delay: D } })
 ```
 
-It changes only numeric literals for `retryTimes`, and it skips strings and comments. It prints
-every site it did not rewrite: a `lock()` call kept in a variable, a `retryDelayFn`, a settings
-object held in a variable, a spread, a `uniqueValue`, an `isLocked`, a `throwOnFail`, a
-`locksCollectionName`, or an import of a 1.x error class.
+It parses each file with the TypeScript package of your project, so text inside a string, a
+comment or a regular expression is not touched. It changes only numeric literals for
+`retryTimes`. It prints every site it did not rewrite: a `lock()` call kept in a variable, a
+`retryDelayFn`, a settings object held in a variable, a spread, a `uniqueValue`, an `isLocked`, a
+`throwOnFail`, a `locksCollectionName`, or an import of a 1.x error class.
+
+After you install 2.0, run it from your project:
 
 ```shell
-npx -p @kontsedal/locco locco-migrate-v2 src/**/*.ts            # report only
-npx -p @kontsedal/locco locco-migrate-v2 --write src/**/*.ts    # rewrite the files
+npx locco-migrate-v2 src/**/*.ts            # report only
+npx locco-migrate-v2 --write src/**/*.ts    # rewrite the files
 ```
 
 Read the report and finish the listed sites by hand. Then run your test suite against a 2.0
