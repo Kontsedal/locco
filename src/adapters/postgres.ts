@@ -1,4 +1,5 @@
 import type { LockAdapter, LockKeyParams, LockLeaseParams } from '../adapter';
+import { ValidationError } from '../errors';
 
 /** The part of a `pg` Pool or Client the adapter uses. */
 export type PostgresLikeClient = {
@@ -38,7 +39,11 @@ export class PostgresAdapter implements LockAdapter {
   readonly #createTable: boolean;
   #tableReady: Promise<void> | undefined;
 
-  constructor({ client, tableName = 'locco_locks', createTable = true }: PostgresAdapterOptions) {
+  constructor(options: PostgresAdapterOptions) {
+    if (typeof options !== 'object' || options === null) {
+      throw new ValidationError('PostgresAdapter options must be an object with a client');
+    }
+    const { client, tableName = 'locco_locks', createTable = true } = options;
     this.#client = client;
     this.#table = quoteIdentifier(tableName);
     this.#ddl = postgresLocksDdl(tableName);
@@ -104,6 +109,12 @@ export class PostgresAdapter implements LockAdapter {
       this.#tableReady = this.#client.query(this.#ddl).then(
         () => undefined,
         (error: unknown) => {
+          // Postgres does not make CREATE TABLE IF NOT EXISTS immune to a race: two sessions
+          // running it at once can raise a duplicate-key or duplicate-table error. The table
+          // exists either way, so the loser proceeds instead of failing its first acquire.
+          if (isConcurrentCreate(error)) {
+            return;
+          }
           // A failed attempt must not poison every later call, so the next call tries again.
           this.#tableReady = undefined;
           throw error;
@@ -117,9 +128,15 @@ export class PostgresAdapter implements LockAdapter {
 function quoteIdentifier(name: string): string {
   const parts = name.split('.');
   if (parts.length > 2 || !parts.every((part) => IDENTIFIER.test(part))) {
-    throw new TypeError(
+    throw new ValidationError(
       `tableName "${name}" must be a plain or schema-qualified SQL identifier, because it is interpolated into SQL`,
     );
   }
   return parts.map((part) => `"${part}"`).join('.');
+}
+
+/** 23505 unique_violation on a catalog index, 42P07 duplicate_table. Both mean someone won the race. */
+function isConcurrentCreate(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === '23505' || code === '42P07';
 }

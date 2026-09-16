@@ -62,12 +62,25 @@ if (!write && rewritten > 0) {
 }
 
 function loadTypeScript() {
+  let loaded;
   try {
-    return createRequire(path.join(process.cwd(), 'package.json'))('typescript');
+    loaded = createRequire(path.join(process.cwd(), 'package.json'))('typescript');
   } catch {
     console.error('locco-migrate-v2 needs the "typescript" package in your project.');
     process.exit(2);
   }
+  // TypeScript 7 ships the native compiler and does not expose the classic syntax API yet, so
+  // every call below would be undefined. Say so instead of dying on a TypeError deep in a walk.
+  if (typeof loaded.createSourceFile !== 'function' || !loaded.ScriptTarget) {
+    console.error(
+      `locco-migrate-v2 needs the classic TypeScript syntax API, which typescript@${loaded.version ?? '?'} in this project does not expose.`,
+    );
+    console.error(
+      'Run it once with TypeScript 5, for example: npx --package typescript@5 -- locco-migrate-v2 --write <file>...',
+    );
+    process.exit(2);
+  }
+  return loaded;
 }
 
 function rewrite(file, source) {
@@ -80,14 +93,19 @@ function rewrite(file, source) {
   );
   const edits = [];
   const leftover = [];
+  const lineOf = (node) =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const visit = (node) => {
     const site = matchSite(node, sourceFile);
-    if (site) {
+    // A site is rebuilt from the source text of its key and ttl, so a second 1.x call nested in
+    // either would be carried across verbatim and the two edits would overlap. Leave the whole
+    // nest to a human rather than rewrite half of it, and report every lock() call inside it.
+    if (site && countLockCalls(node) === 1) {
       edits.push(site);
       return;
     }
     if (isLockCall(node)) {
-      leftover.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+      leftover.push(lineOf(node));
     }
     ts.forEachChild(node, visit);
   };
@@ -157,6 +175,15 @@ function isMethodCall(node, name) {
 
 function isLockCall(node) {
   return isMethodCall(node, 'lock') && node.arguments.length === 2;
+}
+
+/** How many `X.lock(key, ttl)` calls sit in this subtree, the node itself included. */
+function countLockCalls(node) {
+  let count = isLockCall(node) ? 1 : 0;
+  ts.forEachChild(node, (child) => {
+    count += countLockCalls(child);
+  });
+  return count;
 }
 
 /** Turns a literal `{ retryTimes: N, retryDelay: D, totalTime: T }` into a 2.0 retry object. */

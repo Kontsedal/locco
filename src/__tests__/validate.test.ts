@@ -64,14 +64,21 @@ describe('validate', () => {
   });
 
   it('assertAutoExtend enforces the interval margin and the hold deadline', () => {
-    expect(() => assertAutoExtend({ maxHold: 1000 }, 100, true)).not.toThrow();
-    expect(() => assertAutoExtend({}, 100, false)).not.toThrow();
-    expect(() => assertAutoExtend({}, 100, true)).toThrow(/maxHold is required/);
-    expect(() => assertAutoExtend({ interval: 100, maxHold: 1000 }, 100, true)).toThrow(
+    expect(() => assertAutoExtend({ maxHold: 1000 }, 100)).not.toThrow();
+    expect(() => assertAutoExtend({ interval: 30, maxHold: 1000 }, 100)).not.toThrow();
+    expect(() => assertAutoExtend({ interval: 100, maxHold: 1000 }, 100)).toThrow(
       /interval must be smaller/,
     );
-    expect(() => assertAutoExtend({ maxHold: 50 }, 100, true)).toThrow(/at least ttl/);
-    expect(() => assertAutoExtend(true, 100, true)).toThrow(ValidationError);
+    expect(() => assertAutoExtend({ maxHold: 50 }, 100)).toThrow(/at least ttl/);
+  });
+
+  it('assertAutoExtend always demands a hold deadline', () => {
+    // Without one, a caller that never returns renews the lease until the process dies, which is
+    // the failure a lease exists to survive. There is no call shape that may skip it.
+    expect(() => assertAutoExtend({}, 100)).toThrow(/maxHold is required/);
+    expect(() => assertAutoExtend({ interval: 30 }, 100)).toThrow(/maxHold is required/);
+    expect(() => assertAutoExtend(true, 100)).toThrow(/must be an object with maxHold/);
+    expect(() => assertAutoExtend(null, 100)).toThrow(ValidationError);
   });
 
   it('assertSignal wants an AbortSignal or nothing', () => {

@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -14,6 +14,22 @@ function run(source: string, write = false): { output: string; report: string } 
     encoding: 'utf8',
   });
   return { output: readFileSync(file, 'utf8'), report };
+}
+
+/** Runs the codemod in a directory whose `typescript` resolves to `stub`, and returns its exit. */
+function runWithTypeScript(stub: string): { status: number | null; stderr: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), 'locco-codemod-ts-'));
+  writeFileSync(path.join(dir, 'package.json'), '{"name":"probe","version":"1.0.0"}');
+  mkdirSync(path.join(dir, 'node_modules', 'typescript'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'node_modules', 'typescript', 'package.json'),
+    '{"name":"typescript","version":"7.0.2","main":"index.js"}',
+  );
+  writeFileSync(path.join(dir, 'node_modules', 'typescript', 'index.js'), stub);
+  const file = path.join(dir, 'sample.ts');
+  writeFileSync(file, "const a = await locker.lock('k', 100).acquire();");
+  const result = spawnSync(process.execPath, [script, file], { cwd: dir, encoding: 'utf8' });
+  return { status: result.status, stderr: result.stderr };
 }
 
 describe('locco-migrate-v2', () => {
@@ -45,6 +61,33 @@ describe('locco-migrate-v2', () => {
     const { output, report } = run(source, true);
     expect(output).toBe(source);
     expect(report).toContain('0 site(s) rewritten');
+  });
+
+  it('explains itself when the project TypeScript has no classic syntax API', () => {
+    // TypeScript 7 ships the native compiler and exposes none of createSourceFile, ScriptTarget
+    // or the type guards. The codemod loads the project's own TypeScript, so a consumer on 7
+    // would otherwise get a TypeError from inside a tree walk.
+    const { status, stderr } = runWithTypeScript('module.exports = { version: "7.0.2" };');
+    expect(status).toBe(2);
+    expect(stderr).toContain('classic TypeScript syntax API');
+    expect(stderr).toContain('typescript@7.0.2');
+    expect(stderr).toContain('npx --package typescript@5');
+    expect(stderr).not.toContain('TypeError');
+  });
+
+  it('never rewrites a call that contains another one, and reports it instead', () => {
+    // A site is rebuilt from the source text of its key and ttl, so rewriting the outer call
+    // would carry the inner 1.x call across verbatim and the two edits would overlap. Only the
+    // inner call is safe to rewrite; the outer one is reported. Announcing "0 site(s) need a
+    // hand" over code that still calls the deleted API is the worst thing this tool could do.
+    const source =
+      "const x = await locker.lock(await locker.lock('inner', 100).acquire(), 200).acquire();";
+    const { output, report } = run(source, true);
+    expect(output).toBe(
+      "const x = await locker.lock(await locker.acquire('inner', { ttl: 100 }), 200).acquire();",
+    );
+    expect(report).toContain('line 1: a Locker.lock() call the codemod did not rewrite');
+    expect(report).toContain('1 site(s) rewritten, 1 site(s) need a hand.');
   });
 
   it('reports the sites it cannot rewrite', () => {

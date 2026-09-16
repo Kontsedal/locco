@@ -16,6 +16,7 @@ export { type BackoffOptions, DEFAULT_RETRY, exponentialBackoff } from './retry'
 export type {
   AcquireOptions,
   AutoExtendOptions,
+  ContendedReason,
   DelayContext,
   DelayFn,
   LockEvent,
@@ -23,6 +24,5 @@ export type {
   ResolvedRetry,
   RetryOptions,
   TryAcquireOptions,
-  WithLockAutoExtend,
   WithLockOptions,
 } from './types';

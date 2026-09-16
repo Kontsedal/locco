@@ -1,4 +1,5 @@
 import type { LockAdapter, LockKeyParams, LockLeaseParams } from '../adapter';
+import { ValidationError } from '../errors';
 
 type Filter = Record<string, unknown>;
 type Pipeline = Array<Record<string, unknown>>;
@@ -53,8 +54,11 @@ export class MongoAdapter implements LockAdapter {
   #indexes: Promise<void> | undefined;
 
   constructor(options: MongoAdapterOptions) {
+    if (typeof options !== 'object' || options === null) {
+      throw new ValidationError('MongoAdapter options must be an object with a client');
+    }
     if ('locksCollectionName' in options) {
-      throw new TypeError(
+      throw new ValidationError(
         'locksCollectionName was renamed to collectionName in 2.0. The old name would send the locks to the default collection.',
       );
     }

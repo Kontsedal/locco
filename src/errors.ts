@@ -15,12 +15,14 @@ export class LoccoError extends Error {
   }
 }
 
-export type LockHeldReason = 'retries' | 'timeout' | 'expired';
+export type LockHeldReason = 'retries' | 'timeout' | 'expired' | 'late-acquire';
 
 const HELD_MESSAGES: Record<LockHeldReason, string> = {
   retries: 'the retry budget ran out',
   timeout: 'the timeout ran out',
   expired: "an earlier key's lease ran out before the whole set was acquired",
+  'late-acquire':
+    'the backend granted the key but answered after the lease could have ended, so the key was given back',
 };
 
 export class LockHeldError extends LoccoError {
@@ -50,6 +52,7 @@ export class LockHeldError extends LoccoError {
 export type LockLostReason =
   | 'release'
   | 'extend'
+  | 'extend-failed'
   | 'late-extend'
   | 'expired'
   | 'max-hold'
@@ -58,6 +61,9 @@ export type LockLostReason =
 const LOSS_MESSAGES: Record<LockLostReason, string> = {
   release: 'the key was gone or belonged to another holder at release',
   extend: 'the key was gone or belonged to another holder at extend',
+  // The request never got an answer, so the lease may well still be ours. Saying the key was
+  // taken would send an operator hunting a double acquisition that never happened.
+  'extend-failed': 'the extend request failed, so the state of the lease is unknown. See `cause`',
   'late-extend': 'the extend answer arrived after the new lease had already run out',
   expired: 'the lease ran out before an extension refreshed it',
   'max-hold': 'the hold deadline passed',

@@ -75,12 +75,13 @@ if (!lock) {
 }
 ```
 
-Run a callback under a lock that extends itself:
+Run a callback under a lock that extends itself. `maxHold` caps the whole hold, so a callback that
+never returns cannot keep the key forever:
 
 ```ts
 const report = await locker.withLock(
   'nightly-report',
-  { ttl: 60_000, autoExtend: true },
+  { ttl: 60_000, autoExtend: { maxHold: 30 * 60_000 } },
   async (lock) => buildReport({ signal: lock.signal }),
 );
 ```
@@ -145,22 +146,29 @@ retry budget or the timeout runs out.
 | `ttl` | `number` | Lease length in milliseconds. Required. |
 | `retry` | `RetryOptions` | Overrides for this call. |
 | `signal` | `AbortSignal` | Stops the retry loop. When it aborts while a winning attempt is in flight, the key is given back. `acquire` throws `signal.reason`. |
-| `autoExtend` | `{ interval?, maxHold }` | Heartbeat. `maxHold` is required here. See below. |
+| `autoExtend` | `{ interval?, maxHold }` | Heartbeat. `maxHold` is always required. See below. |
 
 ### `locker.tryAcquire(key, { ttl, autoExtend? })`
 
 One attempt. Returns the `Lock`, or `null` when another holder has the key. A driver error throws.
 
+`null` always means another holder has the key, so `if (!lock) return;` is safe. When the backend
+grants the key but answers so slowly that the lease could already have ended, the key is given
+back and `LockHeldError` with `reason: 'late-acquire'` is thrown instead of `null`, because nobody
+holds the key then and skipping the work would be wrong.
+
 ### `locker.withLock(key, options, fn)`
 
-Acquires, runs `fn(lock)`, releases. `autoExtend` may be `true`, or `{ interval?, maxHold? }`. The
-outcome follows one order:
+Acquires, runs `fn(lock)`, releases. Takes the same options as `acquire`, `autoExtend.maxHold`
+included. The outcome follows one order:
 
 1. `fn` threw. That error is thrown. A release error after it goes to a `releaseFailed` event.
-2. `fn` returned and the lock is lost, or the release found the key not ours. `LockLostError` is
+2. `fn` returned and the lock is lost, or a release found the key not ours. `LockLostError` is
    thrown with `completed: true` and the return value in `result`.
-3. `fn` returned and the release threw. The driver error is thrown.
-4. The return value of `fn` is returned.
+3. `fn` returned and the release threw. The driver error is thrown. The return value is lost, so
+   do not rely on `withLock` to report work that a release failure can hide.
+4. The return value of `fn` is returned. A callback that released the lock itself counts here, as
+   long as the key was still ours.
 
 ### `locker.acquireMany(keys, options)`
 
@@ -199,15 +207,21 @@ of them.
 `autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and the
 interval must be smaller than the TTL. The timer does not keep the process alive.
 
-`maxHold` is a deadline on ownership, counted from acquisition. Every extension, manual or from
+`maxHold` is **required** wherever `autoExtend` is, on `acquire`, `tryAcquire` and `withLock`
+alike. It is a deadline on ownership, counted from acquisition. Every extension, manual or from
 the heartbeat, is clamped so the local lease ends at the deadline, and at the deadline
 `lock.signal` aborts with a `LOCK_MAX_HOLD` reason. The backend counts its TTL from the moment it
 handles the request, so the backend lease can outlive the deadline by the time the last extension
-spent in flight, in queues and in the backend. On `acquire`, `maxHold` is required. On `withLock`
-it is optional, because the callback scope ends the hold.
+spent in flight, in queues and in the backend.
+
+There is no way to ask for a heartbeat without a deadline. A caller that never returns, or a
+`withLock` callback that never settles, would otherwise renew the lease until the process died,
+which is the failure a lease exists to survive. Pick a `maxHold` above the longest run you expect.
 
 When an extension fails, throws, or answers after the new lease has run out, the heartbeat stops,
-the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
+the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`. A refusal and a failure
+are told apart: `extend` means the backend said the key was not ours, `extend-failed` means the
+request never got an answer and the lease state is unknown, with the driver error in `cause`.
 
 ### `Lock`
 
@@ -216,6 +230,7 @@ the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`.
 | `key`, `token`, `ttl`, `retry` | Read-only. `key` includes the prefix. `ttl` is the latest lease length. |
 | `state` | `'held'`, `'lost'` or `'released'`. Loss is sticky until `release()`. |
 | `lostReason` | Why the lock was lost, or `undefined` when it was never lost. |
+| `heldMs` | How long the lock was held. Stops counting once it is lost or released. |
 | `signal` | Aborts on every known loss: a failed or late extension, a local lease expiry, the hold deadline, a release or a check that finds the key not ours. Pass it to the work. |
 | `release()` | `true` when it deleted our key, `false` when the key was gone or not ours. Throws only when the driver throws; the lock then keeps its state and a later call tries again. After a successful call, a second call returns `false`. |
 | `extend(ttl)` | New lease from now, clamped to the hold deadline. Throws `LockLostError` when the key was not ours, and the `LOCK_MAX_HOLD` error when the deadline has passed. |
@@ -229,9 +244,9 @@ error is not wrapped. It reaches you as the driver threw it.
 
 | Class | `code` | When |
 |---|---|---|
-| `LockHeldError` | `LOCK_HELD` | Another holder has the key and the budget is spent. Carries `key`, `attempts`, `elapsedMs`, `reason`. |
+| `LockHeldError` | `LOCK_HELD` | The key could not be taken and the budget is spent. Carries `key`, `attempts`, `elapsedMs`, `reason`. |
 | `LockLostError` | `LOCK_LOST` | The lease was lost. Carries `key`, `reason`, and from `withLock` also `completed` and `result`. |
-| `LockStateError` | `LOCK_STATE` | `extend` on a released lock. |
+| `LockStateError` | `LOCK_STATE` | `extend` on a lock that is released, or one whose release is in flight. |
 | `LoccoError` | `LOCK_MAX_HOLD` | The abort reason on `lock.signal` at the hold deadline. |
 | `ValidationError` | `LOCK_VALIDATION` | A wrong argument. |
 
@@ -257,11 +272,18 @@ try {
 | `type` | Extra fields | When |
 |---|---|---|
 | `acquired` | `waitedMs`, `attempts` | A lock was taken. |
-| `contended` | `attempt`, `elapsedMs` | An attempt found another holder. |
+| `contended` | `attempt`, `elapsedMs`, `reason` | An attempt yielded no lock. |
 | `extended` | `heldMs` | A lease was extended. |
 | `released` | `heldMs` | Our key was deleted. |
 | `lost` | `heldMs`, `reason` | The lease was lost. |
-| `releaseFailed` | `heldMs`, `error` | A cleanup release threw while another error was in flight. |
+| `releaseFailed` | `heldMs`, `error` | A release threw. |
+
+A lock reports its ending once. A lease that runs out while a release is in flight fires `lost`
+and no `released`, so counting the two never double-counts one lock.
+
+`contended.reason` is `'held'` when another holder had the key, and `'late'` when the backend
+granted it to us but answered too slowly to use the lease. A run of `'late'` points at the
+backend, not at a busy key.
 
 `heldMs` against `ttl` tells you when a TTL is too short. `waitedMs` tells you how contended a key
 is.

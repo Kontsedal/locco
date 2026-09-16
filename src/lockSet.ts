@@ -15,33 +15,39 @@ export class LockSet implements AsyncDisposable {
   }
 
   /**
-   * Releases every lock, even when one throws. Returns true when every key was still ours.
-   * When releases throw, the first error is thrown and the others go to `releaseFailed` events.
+   * Releases every lock, even when one throws. Returns true when every key was still ours, and
+   * false when any key was already gone. A second call answers false, like `Lock.release`.
+   * Every failure gets a `releaseFailed` event, and the first error is then thrown.
    */
   async release(): Promise<boolean> {
-    const results = await Promise.allSettled(this.locks.map((lock) => lock.release()));
+    // Each outcome carries its own lock, so nothing has to line results up with the array by index.
+    const outcomes = await Promise.all(
+      this.locks.map(async (lock) => {
+        try {
+          return { lock, released: await lock.release(), error: undefined };
+        } catch (error) {
+          return { lock, released: false, error };
+        }
+      }),
+    );
     let allReleased = true;
     let firstError: { error: unknown } | undefined;
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
-        allReleased = allReleased && result.value;
-        return;
+    for (const { lock, released, error } of outcomes) {
+      if (error === undefined) {
+        allReleased = allReleased && released;
+        continue;
       }
-      if (!firstError) {
-        firstError = { error: result.reason };
-        return;
-      }
-      const lock = this.locks[index];
-      if (lock) {
-        this.#emit({
-          type: 'releaseFailed',
-          key: lock.key,
-          ttl: lock.ttl,
-          heldMs: 0,
-          error: result.reason,
-        });
-      }
-    });
+      firstError ??= { error };
+      // Every failure is reported, the first one included. It is thrown as well, but an observer
+      // counting keys that may have leaked has to see all of them, not all but one.
+      this.#emit({
+        type: 'releaseFailed',
+        key: lock.key,
+        ttl: lock.ttl,
+        heldMs: lock.heldMs,
+        error,
+      });
+    }
     if (firstError) {
       throw firstError.error;
     }

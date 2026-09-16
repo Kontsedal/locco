@@ -20,6 +20,22 @@ describe('mergeRetry', () => {
     const delay = () => 5;
     expect(mergeRetry({ timeout: 1000 }, { delay })).toEqual({ retries: 10, delay, timeout: 1000 });
   });
+
+  it('keeps DEFAULT_RETRY frozen, so nobody can change the default for the whole process', () => {
+    // mergeRetry reads it on every acquisition. A mutation would reach every Locker in the
+    // process, including ones in unrelated modules that never asked for it.
+    expect(Object.isFrozen(DEFAULT_RETRY)).toBe(true);
+    expect(() => {
+      (DEFAULT_RETRY as { retries: number }).retries = 999;
+    }).toThrow(TypeError);
+    expect(mergeRetry().retries).toBe(10);
+  });
+
+  it('does not let a merged result alias the default', () => {
+    const merged = mergeRetry({ delay: 1 });
+    merged.retries = 0;
+    expect(DEFAULT_RETRY.retries).toBe(10);
+  });
 });
 
 describe('exponentialBackoff', () => {

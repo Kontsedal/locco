@@ -6,12 +6,12 @@ import { LockSet } from './lockSet';
 import { mergeRetry, wait } from './retry';
 import type {
   AcquireOptions,
+  ContendedReason,
   LockEvent,
   LockEventHandler,
   ResolvedRetry,
   RetryOptions,
   TryAcquireOptions,
-  WithLockAutoExtend,
   WithLockOptions,
 } from './types';
 import {
@@ -57,6 +57,13 @@ type NormalizeInput = {
 
 type Prepared = Normalized & { key: string };
 
+/**
+ * An attempt either wins a usable lock or does not. `late` is not contention: the backend granted
+ * the key but answered so slowly that the lease could already have ended, so the key was given
+ * back. Reporting that as `held` would tell a caller another holder has a key that is in fact free.
+ */
+type Attempt = { lock: Lock } | { lock: null; reason: ContendedReason };
+
 const defaultToken = (): string => randomBytes(16).toString('hex');
 
 // A wall clock can step backwards, which would push the local expiry estimate past the backend's.
@@ -99,27 +106,43 @@ export class Locker {
   /** Acquires the key, retrying while another holder has it. Throws LockHeldError when the budget runs out. */
   async acquire(key: string, options: AcquireOptions): Promise<Lock> {
     assertKey(key);
-    const normalized = this.#normalize(options, true);
+    const normalized = this.#normalize(options);
     return this.#acquireWithRetry({ key: this.#fullKey(key), ...normalized });
   }
 
-  /** One attempt. Returns null when another holder has the key. Ignores the retry options. */
+  /**
+   * One attempt. Returns null when another holder has the key, so `if (!lock) return` is safe.
+   * Throws LockHeldError with reason `late-acquire` when the backend granted the key but answered
+   * too slowly to use it, because nobody holds the key then and skipping the work would be wrong.
+   * Ignores the retry options.
+   */
   async tryAcquire(key: string, options: TryAcquireOptions): Promise<Lock | null> {
     assertKey(key);
-    const normalized = this.#normalize(options, true);
+    const normalized = this.#normalize(options);
     const prepared: Prepared = { key: this.#fullKey(key), ...normalized };
     const startedAt = this.#now();
-    const lock = await this.#attempt(prepared, startedAt, 1);
-    if (!lock) {
-      this.#emit({
-        type: 'contended',
+    const attempt = await this.#attempt(prepared, startedAt, 1);
+    if (attempt.lock) {
+      return attempt.lock;
+    }
+    const elapsedMs = this.#elapsed(startedAt);
+    this.#emit({
+      type: 'contended',
+      key: prepared.key,
+      ttl: prepared.ttl,
+      attempt: 0,
+      elapsedMs,
+      reason: attempt.reason,
+    });
+    if (attempt.reason === 'late') {
+      throw new LockHeldError({
         key: prepared.key,
-        ttl: prepared.ttl,
-        attempt: 0,
-        elapsedMs: this.#elapsed(startedAt),
+        attempts: 1,
+        elapsedMs,
+        reason: 'late-acquire',
       });
     }
-    return lock;
+    return null;
   }
 
   /**
@@ -133,10 +156,7 @@ export class Locker {
   ): Promise<T> {
     assertKey(key);
     assertFunction(fn, 'fn');
-    const normalized = this.#normalize(
-      { ...options, autoExtend: normalizeWithLockAutoExtend(options?.autoExtend) },
-      false,
-    );
+    const normalized = this.#normalize(options);
     const lock = await this.#acquireWithRetry({ key: this.#fullKey(key), ...normalized });
     let result: T;
     try {
@@ -145,15 +165,22 @@ export class Locker {
       await this.#releaseQuietly(lock);
       throw error;
     }
-    if (lock.state === 'lost') {
+    // `lostReason` covers both a loss during the work and a release the callback ran itself that
+    // found the key not ours. `state` alone would miss the second: it reads `released` there.
+    if (lock.lostReason !== undefined) {
       await this.#releaseQuietly(lock);
       throw new LockLostError({
         key: lock.key,
-        reason: lock.lostReason ?? 'expired',
+        reason: lock.lostReason,
         completed: true,
         result,
         cause: lock.signal.reason,
       });
+    }
+    // The callback released the lock itself and the key was still ours. Nothing went wrong, and
+    // a second release would answer `false` and turn a clean run into a LockLostError.
+    if (lock.state === 'released') {
+      return result;
     }
     const released = await lock.release();
     if (!released) {
@@ -168,20 +195,20 @@ export class Locker {
    */
   async acquireMany(keys: string[], options: AcquireOptions): Promise<LockSet> {
     assertKeys(keys);
-    const normalized = this.#normalize(options, true);
+    const normalized = this.#normalize(options);
     const uniqueKeys = [...new Set(keys)].sort();
     const startedAt = this.#now();
     const deadline =
       normalized.retry.timeout === undefined ? undefined : startedAt + normalized.retry.timeout;
     const locks: Lock[] = [];
+    let lastKey = '';
     try {
       for (const key of uniqueKeys) {
-        locks.push(
-          await this.#acquireWithRetry({ key: this.#fullKey(key), ...normalized }, deadline),
-        );
+        lastKey = this.#fullKey(key);
+        locks.push(await this.#acquireWithRetry({ key: lastKey, ...normalized }, deadline));
       }
       normalized.signal?.throwIfAborted();
-      await this.#refreshSet(locks, normalized.ttl, startedAt, deadline);
+      await this.#refreshSet(locks, normalized.ttl, startedAt, deadline, lastKey);
       normalized.signal?.throwIfAborted();
       return new LockSet(locks, (event) => this.#emit(event));
     } catch (error) {
@@ -198,7 +225,7 @@ export class Locker {
     return Math.round(this.#now() - since);
   }
 
-  #normalize(options: NormalizeInput, maxHoldRequired: boolean): Normalized {
+  #normalize(options: NormalizeInput): Normalized {
     if (typeof options !== 'object' || options === null) {
       throw new ValidationError('options must be an object');
     }
@@ -208,7 +235,7 @@ export class Locker {
     assertSignal(signal);
     let heartbeat: HeartbeatConfig | undefined;
     if (autoExtend !== undefined) {
-      assertAutoExtend(autoExtend, ttl, maxHoldRequired);
+      assertAutoExtend(autoExtend, ttl);
       heartbeat = { interval: autoExtend.interval, maxHold: autoExtend.maxHold };
     }
     return { ttl, retry: mergeRetry(this.#retry, retry), signal, heartbeat };
@@ -221,6 +248,9 @@ export class Locker {
       sharedDeadline ?? (retry.timeout === undefined ? undefined : startedAt + retry.timeout);
     let attempt = 0;
     let previousDelay = 0;
+    // What stopped the most recent attempt, so the final error blames the right thing: a busy key
+    // or a backend too slow to hand back a usable lease.
+    let lastReason: ContendedReason = 'held';
     for (;;) {
       signal?.throwIfAborted();
       if (deadline !== undefined && this.#now() >= deadline) {
@@ -231,19 +261,25 @@ export class Locker {
           reason: 'timeout',
         });
       }
-      const lock = await this.#attempt(prepared, startedAt, attempt + 1);
-      if (lock) {
+      const outcome = await this.#attempt(prepared, startedAt, attempt + 1);
+      if (outcome.lock) {
         if (signal?.aborted) {
           // The caller cancelled while the backend was answering. The lock is not wanted.
-          await this.#releaseQuietly(lock);
+          await this.#releaseQuietly(outcome.lock);
           throw signal.reason;
         }
-        return lock;
+        return outcome.lock;
       }
+      lastReason = outcome.reason;
       const elapsedMs = this.#elapsed(startedAt);
-      this.#emit({ type: 'contended', key, ttl, attempt, elapsedMs });
+      this.#emit({ type: 'contended', key, ttl, attempt, elapsedMs, reason: lastReason });
       if (attempt >= retry.retries) {
-        throw new LockHeldError({ key, attempts: attempt + 1, elapsedMs, reason: 'retries' });
+        throw new LockHeldError({
+          key,
+          attempts: attempt + 1,
+          elapsedMs,
+          reason: lastReason === 'late' ? 'late-acquire' : 'retries',
+        });
       }
       const delay = await this.#delayFor(retry, attempt, elapsedMs, previousDelay);
       // A slow delay function cannot be interrupted, so the signal is read again after it.
@@ -273,13 +309,13 @@ export class Locker {
     return delay;
   }
 
-  async #attempt(prepared: Prepared, startedAt: number, attempts: number): Promise<Lock | null> {
+  async #attempt(prepared: Prepared, startedAt: number, attempts: number): Promise<Attempt> {
     const { key, ttl } = prepared;
     const token = this.#token();
     const requestedAt = this.#now();
     const acquired = await this.#adapter.acquire({ key, token, ttl });
     if (!acquired) {
-      return null;
+      return { lock: null, reason: 'held' };
     }
     const elapsedMs = this.#elapsed(requestedAt);
     if (elapsedMs >= ttl) {
@@ -290,7 +326,7 @@ export class Locker {
       } catch (error) {
         this.#emit({ type: 'releaseFailed', key, ttl, heldMs: elapsedMs, error });
       }
-      return null;
+      return { lock: null, reason: 'late' };
     }
     const lock = new Lock({
       adapter: this.#adapter,
@@ -304,7 +340,7 @@ export class Locker {
       heartbeat: prepared.heartbeat,
     });
     this.#emit({ type: 'acquired', key, ttl, waitedMs: this.#elapsed(startedAt), attempts });
-    return lock;
+    return { lock };
   }
 
   /** Gives every lease of the set a fresh TTL. An earlier lease that already ran out fails the set. */
@@ -313,8 +349,8 @@ export class Locker {
     ttl: number,
     startedAt: number,
     deadline: number | undefined,
+    lastKey: string,
   ): Promise<void> {
-    const lastKey = locks.at(-1)?.key ?? '';
     if (deadline !== undefined && this.#now() >= deadline) {
       throw new LockHeldError({
         key: lastKey,
@@ -323,14 +359,24 @@ export class Locker {
         reason: 'timeout',
       });
     }
-    const results = await Promise.allSettled(locks.map((lock) => lock.extend(ttl)));
-    const failed = results.findIndex((result) => result.status === 'rejected');
-    if (failed !== -1) {
-      const failure = results[failed];
-      if (failure?.status === 'rejected' && !(failure.reason instanceof LockLostError)) {
-        throw failure.reason;
+    // Each outcome carries its own lock, so nothing has to line results up with the array by index.
+    const outcomes = await Promise.all(
+      locks.map(async (lock) => {
+        try {
+          await lock.extend(ttl);
+          return { lock, error: undefined };
+        } catch (error) {
+          return { lock, error };
+        }
+      }),
+    );
+    const failure = outcomes.find((outcome) => outcome.error !== undefined);
+    if (failure) {
+      // A driver error is not contention and must not be reported as a busy key.
+      if (!(failure.error instanceof LockLostError)) {
+        throw failure.error;
       }
-      throw this.#setExpired(locks[failed]?.key ?? lastKey, locks.length, startedAt);
+      throw this.#setExpired(failure.lock.key, locks.length, startedAt);
     }
     // A member can be lost while a slower member was still being refreshed.
     const lost = locks.find((lock) => lock.state !== 'held');
@@ -352,7 +398,13 @@ export class Locker {
     try {
       await lock.release();
     } catch (error) {
-      this.#emit({ type: 'releaseFailed', key: lock.key, ttl: lock.ttl, heldMs: 0, error });
+      this.#emit({
+        type: 'releaseFailed',
+        key: lock.key,
+        ttl: lock.ttl,
+        heldMs: lock.heldMs,
+        error,
+      });
     }
   }
 
@@ -363,23 +415,14 @@ export class Locker {
     }
     try {
       const result = handler(event);
-      if (result instanceof Promise) {
-        result.catch(() => undefined);
+      // Duck-typed, not `instanceof Promise`: a handler built on a promise library, downleveled
+      // onto a polyfill, or created in another realm returns a thenable that fails that test, and
+      // its rejection would escape as an unhandled rejection and take the process down.
+      if (typeof (result as PromiseLike<void> | undefined)?.then === 'function') {
+        Promise.resolve(result).catch(() => undefined);
       }
     } catch {
       // A logging hook must not lose an acquired handle or change lock control flow.
     }
   }
-}
-
-function normalizeWithLockAutoExtend(
-  autoExtend: WithLockAutoExtend | undefined,
-): HeartbeatConfig | undefined {
-  if (autoExtend === undefined || autoExtend === false) {
-    return undefined;
-  }
-  if (autoExtend === true) {
-    return {};
-  }
-  return autoExtend;
 }

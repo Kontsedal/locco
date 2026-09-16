@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgresAdapter, type PostgresLikeClient, postgresLocksDdl } from '../adapters/postgres';
+import { ValidationError } from '../errors';
 import { postgresPool, sleep, uniqueKey } from './backends';
 
 describe('PostgresAdapter', () => {
@@ -58,10 +59,18 @@ describe('PostgresAdapter', () => {
   });
 
   it('accepts only a plain or schema-qualified identifier', () => {
+    // A ValidationError, not a bare TypeError: the README tells consumers to switch on
+    // `error.code`, and LOCK_VALIDATION has to cover every wrong argument to reach them.
     expect(() => new PostgresAdapter({ client: pool, tableName: 'locks; DROP TABLE x' })).toThrow(
-      TypeError,
+      ValidationError,
     );
-    expect(() => new PostgresAdapter({ client: pool, tableName: 'a.b.c' })).toThrow(TypeError);
+    expect(() => new PostgresAdapter({ client: pool, tableName: 'a.b.c' })).toThrow(
+      ValidationError,
+    );
+    expect(() => new PostgresAdapter(undefined as never)).toThrow(ValidationError);
+    expect(() => new PostgresAdapter({ client: pool, tableName: 'locks; DROP TABLE x' })).toThrow(
+      /must be a plain or schema-qualified SQL identifier/,
+    );
     expect(
       () => new PostgresAdapter({ client: pool, tableName: 'public.locco_locks' }),
     ).not.toThrow();
@@ -76,6 +85,33 @@ describe('PostgresAdapter', () => {
     await sleep(150);
     await expect(adapter.acquire({ key, token: 'b', ttl: 5000 })).resolves.toBe(true);
     await expect(adapter.release({ key, token: 'b' })).resolves.toBe(true);
+  });
+
+  it('treats a lost CREATE TABLE race as success, so the first acquire still works', async () => {
+    // Postgres does not make CREATE TABLE IF NOT EXISTS race-proof. Two instances starting
+    // together can make one of them see 23505 or 42P07; the table exists either way.
+    for (const code of ['23505', '42P07']) {
+      const client: PostgresLikeClient = {
+        query: (text, values) => {
+          if (text.startsWith('CREATE TABLE')) {
+            return Promise.reject(Object.assign(new Error(`duplicate ${code}`), { code }));
+          }
+          return pool.query(text, values);
+        },
+      };
+      const adapter = new PostgresAdapter({ client, tableName: 'locco_test_locks' });
+      await expect(adapter.acquire({ key: uniqueKey(), token: 't', ttl: 1000 })).resolves.toBe(
+        true,
+      );
+    }
+  });
+
+  it('answers 0 when the driver reports no row count for the sweep', async () => {
+    const client: PostgresLikeClient = {
+      query: async () => ({ rowCount: null, rows: [] }),
+    };
+    const adapter = new PostgresAdapter({ client, tableName: 'locco_test_sweep' });
+    await expect(adapter.sweepExpired()).resolves.toBe(0);
   });
 
   it('sweeps the rows whose lease is over and keeps the live ones', async () => {

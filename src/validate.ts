@@ -65,18 +65,24 @@ export function isDelayValue(value: unknown): value is number {
 
 export type NormalizedAutoExtend = {
   interval?: number;
-  maxHold?: number;
+  maxHold: number;
 };
 
+/**
+ * A heartbeat always carries a deadline. Without one, a caller that never returns, or a callback
+ * that never settles, would keep renewing the lease until the process dies, which is exactly the
+ * failure a lease is meant to survive.
+ */
 export function assertAutoExtend(
   options: unknown,
   ttl: number,
-  maxHoldRequired: boolean,
 ): asserts options is NormalizedAutoExtend {
   if (typeof options !== 'object' || options === null) {
-    throw new ValidationError('autoExtend must be an object');
+    throw new ValidationError(
+      'autoExtend must be an object with maxHold, for example { maxHold: 600000 }',
+    );
   }
-  const { interval, maxHold } = options as NormalizedAutoExtend;
+  const { interval, maxHold } = options as Partial<NormalizedAutoExtend>;
   if (interval !== undefined) {
     assertDuration(interval, 'autoExtend.interval');
     if (interval >= ttl) {
@@ -84,12 +90,7 @@ export function assertAutoExtend(
     }
   }
   if (maxHold === undefined) {
-    if (maxHoldRequired) {
-      throw new ValidationError(
-        'autoExtend.maxHold is required on acquire, so a forgotten lock still expires',
-      );
-    }
-    return;
+    throw new ValidationError('autoExtend.maxHold is required, so a forgotten lock still expires');
   }
   assertDuration(maxHold, 'autoExtend.maxHold');
   if (maxHold < ttl) {

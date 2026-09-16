@@ -57,7 +57,17 @@ export function postgresPool(): Pool {
 
 export function postgresBackend(): Backend {
   const pool = postgresPool();
-  return { adapter: new PostgresAdapter({ client: pool }), close: () => pool.end() };
+  const adapter = new PostgresAdapter({ client: pool });
+  return {
+    adapter,
+    close: async () => {
+      // Postgres has no TTL reaper, so a row outlives the run that wrote it and the table grows
+      // with every `npm test`. Sweeping is safe while other workers hold live leases; dropping
+      // the table would not be, because test files run in parallel.
+      await adapter.sweepExpired();
+      await pool.end();
+    },
+  };
 }
 
 export const ALL_BACKENDS: Array<[string, () => Backend | Promise<Backend>]> = [

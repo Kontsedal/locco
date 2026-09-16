@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { IoRedisAdapter } from '../adapters/ioRedis';
 import { NodeRedisAdapter } from '../adapters/nodeRedis';
 import { isNoScriptError } from '../adapters/redisScripts';
@@ -35,6 +35,42 @@ describe('Redis adapters', () => {
     expect(isNoScriptError(new Error('NOSCRIPT No matching script. Please use EVAL.'))).toBe(true);
     expect(isNoScriptError(new Error('ERR wrong number of arguments'))).toBe(false);
     expect(isNoScriptError(null)).toBe(false);
+  });
+
+  it('lets a script error that is not NOSCRIPT through, instead of retrying it as EVAL', async () => {
+    // Re-sending the script on, say, a connection error would hide a real fault and double the
+    // work. Only a missing script cache is worth a second attempt.
+    const evalSpy = vi.fn();
+    const adapter = new IoRedisAdapter({
+      client: {
+        set: async () => 'OK',
+        get: async () => null,
+        eval: evalSpy,
+        evalsha: async () => {
+          throw new Error('READONLY You cannot write against a read only replica.');
+        },
+      },
+    });
+    await expect(adapter.release({ key: 'k', token: 't' })).rejects.toThrow(/READONLY/);
+    await expect(adapter.extend({ key: 'k', token: 't', ttl: 1000 })).rejects.toThrow(/READONLY/);
+    expect(evalSpy).not.toHaveBeenCalled();
+  });
+
+  it('lets a NodeRedis script error that is not NOSCRIPT through', async () => {
+    const evalSpy = vi.fn();
+    const adapter = new NodeRedisAdapter({
+      client: {
+        set: async () => 'OK',
+        get: async () => null,
+        eval: evalSpy,
+        evalSha: async () => {
+          throw new Error('READONLY You cannot write against a read only replica.');
+        },
+      },
+    });
+    await expect(adapter.release({ key: 'k', token: 't' })).rejects.toThrow(/READONLY/);
+    await expect(adapter.extend({ key: 'k', token: 't', ttl: 1000 })).rejects.toThrow(/READONLY/);
+    expect(evalSpy).not.toHaveBeenCalled();
   });
 
   describe('NodeRedisAdapter', () => {

@@ -76,12 +76,10 @@ export class InMemoryAdapter implements LockAdapter, Disposable {
     const expiresAt = this.#now() + ttl;
     this.#entries.set(key, { token, expiresAt });
     clearTimeout(this.#timers.get(key));
-    // The timer only frees memory. Every read checks `expiresAt`, so a late timer changes nothing.
+    // The timer only frees memory; every read checks `expiresAt` anyway. `#set`, `#delete` and
+    // `clear` all cancel it, so when it does run it can only be for the entry it was made for.
     const timer = setTimeout(() => {
-      const current = this.#entries.get(key);
-      if (current && current.expiresAt === expiresAt) {
-        this.#entries.delete(key);
-      }
+      this.#entries.delete(key);
       this.#timers.delete(key);
     }, ttl);
     timer.unref();

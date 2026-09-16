@@ -58,6 +58,11 @@ retried without a limit. Pass `retries: Infinity` to keep that.
   `extendLock` on the client. 2.0 sends the scripts with `EVALSHA` and falls back to `EVAL`.
 - **Validation errors are rejections.** Every acquire method is async, so a bad argument rejects
   the promise instead of throwing before the promise exists.
+- **A heartbeat always needs `maxHold`.** 1.x had no heartbeat, so nothing to port. If you reach
+  for `autoExtend`, give it a deadline: there is no shorthand that renews without one.
+- **`tryAcquire` returns `null` only for a real holder.** When the backend grants the key but
+  answers after the lease could have ended, it throws `LockHeldError` with
+  `reason: 'late-acquire'` instead, so a slow backend cannot make you skip work on a free key.
 
 ## The codemod
 
@@ -78,7 +83,16 @@ It parses each file with the TypeScript package of your project, so text inside 
 comment or a regular expression is not touched. It changes only numeric literals for
 `retryTimes`. It prints every site it did not rewrite: a `lock()` call kept in a variable, a
 `retryDelayFn`, a settings object held in a variable, a spread, a `uniqueValue`, an `isLocked`, a
-`throwOnFail`, a `locksCollectionName`, or an import of a 1.x error class.
+`throwOnFail`, a `locksCollectionName`, or an import of a 1.x error class. A `lock()` call that
+holds another one inside its key or ttl is reported rather than rewritten, because rewriting the
+outer call would carry the inner one across untouched.
+
+It needs the classic TypeScript syntax API, which TypeScript 7 does not expose. On a project that
+has moved to 7, run it once under 5:
+
+```shell
+npx --package typescript@5 -- locco-migrate-v2 --write src/**/*.ts
+```
 
 After you install 2.0, run it from your project:
 

@@ -1,7 +1,9 @@
 import type { DelayFn, ResolvedRetry, RetryOptions } from './types';
 import { assertDuration } from './validate';
 
-export const DEFAULT_RETRY: ResolvedRetry = { retries: 10, delay: 200 };
+/** Frozen: `mergeRetry` reads it on every acquisition, so a mutation would change the default
+ * policy for every Locker in the process. */
+export const DEFAULT_RETRY: Readonly<ResolvedRetry> = Object.freeze({ retries: 10, delay: 200 });
 
 /** Later layers win per field. A field that a layer leaves undefined keeps the earlier value. */
 export function mergeRetry(...layers: Array<RetryOptions | undefined>): ResolvedRetry {

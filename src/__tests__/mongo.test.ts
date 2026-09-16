@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MongoAdapter, type MongoLikeClient, type MongoLikeCollection } from '../adapters/mongo';
+import { ValidationError } from '../errors';
 import { mongoClient, uniqueKey } from './backends';
 
 function fakeCollection(overrides: Partial<MongoLikeCollection> = {}): MongoLikeCollection {
@@ -33,6 +34,13 @@ describe('MongoAdapter', () => {
     expect(() => new MongoAdapter({ client, locksCollectionName: 'x' } as never)).toThrow(
       /renamed to collectionName/,
     );
+  });
+
+  it('rejects a missing options object with a ValidationError, not a raw TypeError', () => {
+    // The README tells consumers to switch on `error.code`, so every wrong argument has to be a
+    // LOCK_VALIDATION error to reach that handling.
+    expect(() => new MongoAdapter(undefined as never)).toThrow(ValidationError);
+    expect(() => new MongoAdapter(null as never)).toThrow(/must be an object with a client/);
   });
 
   it('skips index creation when told to', async () => {
@@ -83,6 +91,11 @@ describe('MongoAdapter', () => {
       expect(document?.expireAt.getTime()).toBeGreaterThan(Date.now() + 50_000);
       await expect(adapter.release({ key, token: 't' })).resolves.toBe(true);
     } finally {
+      await client
+        .db()
+        .collection('locco-locks-shape')
+        .drop()
+        .catch(() => undefined);
       await client.close();
     }
   });

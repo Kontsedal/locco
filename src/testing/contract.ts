@@ -143,26 +143,31 @@ export function runLockAdapterContract(
       await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(false);
     });
 
-    it('lets exactly one of many concurrent acquires win a free key', async () => {
-      const k = key();
+    /** Races `racers` acquires on one key and gives the winner's minute-long lease straight back. */
+    const raceFor = async (k: string): Promise<number> => {
+      const tokens = Array.from({ length: racers }, token);
       const results = await Promise.all(
-        Array.from({ length: racers }, () =>
-          adapter.acquire({ key: k, token: token(), ttl: raceTtl }),
-        ),
+        tokens.map((t) => adapter.acquire({ key: k, token: t, ttl: raceTtl })),
       );
-      expect(results.filter(Boolean)).toHaveLength(1);
+      // `raceTtl` is a minute or more, so a lease left behind outlives the whole suite and piles
+      // up in a backend that has no reaper of its own, such as Postgres.
+      await Promise.all(
+        tokens
+          .filter((_, index) => results[index])
+          .map((t) => adapter.release({ key: k, token: t })),
+      );
+      return results.filter(Boolean).length;
+    };
+
+    it('lets exactly one of many concurrent acquires win a free key', async () => {
+      await expect(raceFor(key())).resolves.toBe(1);
     });
 
     it('lets exactly one of many concurrent acquires take over an expired key', async () => {
       const k = key();
       await adapter.acquire({ key: k, token: token(), ttl });
       await sleep(afterExpiry);
-      const results = await Promise.all(
-        Array.from({ length: racers }, () =>
-          adapter.acquire({ key: k, token: token(), ttl: raceTtl }),
-        ),
-      );
-      expect(results.filter(Boolean)).toHaveLength(1);
+      await expect(raceFor(k)).resolves.toBe(1);
     });
 
     it('stores a key and a token verbatim, including a key that starts with $', async () => {

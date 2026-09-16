@@ -43,11 +43,8 @@ export type AcquireOptions = {
 
 export type TryAcquireOptions = Omit<AcquireOptions, 'retry' | 'signal'>;
 
-export type WithLockAutoExtend = boolean | { interval?: number; maxHold?: number };
-
-export type WithLockOptions = Omit<AcquireOptions, 'autoExtend'> & {
-  autoExtend?: WithLockAutoExtend;
-};
+/** `withLock` takes the same options as `acquire`, `maxHold` included. */
+export type WithLockOptions = AcquireOptions;
 
 type LockEventBase = {
   /** The key as stored in the backend, prefix included. */
@@ -55,9 +52,21 @@ type LockEventBase = {
   ttl: number;
 };
 
+/**
+ * Why an attempt yielded no lock. `held` means another holder had the key. `late` means the
+ * backend granted it to us but answered after the lease could have ended, so the key was
+ * given back. A run of `late` events points at the backend, not at a busy key.
+ */
+export type ContendedReason = 'held' | 'late';
+
 export type LockEvent =
   | (LockEventBase & { type: 'acquired'; waitedMs: number; attempts: number })
-  | (LockEventBase & { type: 'contended'; attempt: number; elapsedMs: number })
+  | (LockEventBase & {
+      type: 'contended';
+      attempt: number;
+      elapsedMs: number;
+      reason: ContendedReason;
+    })
   | (LockEventBase & { type: 'extended'; heldMs: number })
   | (LockEventBase & { type: 'released'; heldMs: number })
   | (LockEventBase & { type: 'lost'; heldMs: number; reason: LockLostReason })
