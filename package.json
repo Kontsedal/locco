@@ -1,6 +1,6 @@
 {
   "name": "@kontsedal/locco",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "description": "Distributed locks for Node.js with Redis, MongoDB, Postgres and in-memory adapters",
   "keywords": [
     "lock",
@@ -28,13 +28,13 @@
     "scripts/codemod-v1-to-v2.mjs"
   ],
   "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
       },
       "require": {
         "types": "./dist/index.d.cts",
@@ -43,8 +43,8 @@
     },
     "./redis": {
       "import": {
-        "types": "./dist/redis.d.ts",
-        "default": "./dist/redis.js"
+        "types": "./dist/redis.d.mts",
+        "default": "./dist/redis.mjs"
       },
       "require": {
         "types": "./dist/redis.d.cts",
@@ -53,8 +53,8 @@
     },
     "./node-redis": {
       "import": {
-        "types": "./dist/node-redis.d.ts",
-        "default": "./dist/node-redis.js"
+        "types": "./dist/node-redis.d.mts",
+        "default": "./dist/node-redis.mjs"
       },
       "require": {
         "types": "./dist/node-redis.d.cts",
@@ -63,8 +63,8 @@
     },
     "./mongo": {
       "import": {
-        "types": "./dist/mongo.d.ts",
-        "default": "./dist/mongo.js"
+        "types": "./dist/mongo.d.mts",
+        "default": "./dist/mongo.mjs"
       },
       "require": {
         "types": "./dist/mongo.d.cts",
@@ -73,8 +73,8 @@
     },
     "./postgres": {
       "import": {
-        "types": "./dist/postgres.d.ts",
-        "default": "./dist/postgres.js"
+        "types": "./dist/postgres.d.mts",
+        "default": "./dist/postgres.mjs"
       },
       "require": {
         "types": "./dist/postgres.d.cts",
@@ -83,8 +83,8 @@
     },
     "./memory": {
       "import": {
-        "types": "./dist/memory.d.ts",
-        "default": "./dist/memory.js"
+        "types": "./dist/memory.d.mts",
+        "default": "./dist/memory.mjs"
       },
       "require": {
         "types": "./dist/memory.d.cts",
@@ -93,8 +93,8 @@
     },
     "./testing": {
       "import": {
-        "types": "./dist/testing.d.ts",
-        "default": "./dist/testing.js"
+        "types": "./dist/testing.d.mts",
+        "default": "./dist/testing.mjs"
       },
       "require": {
         "types": "./dist/testing.d.cts",
@@ -106,27 +106,27 @@
   "typesVersions": {
     "*": {
       "redis": [
-        "./dist/redis.d.ts"
+        "./dist/redis.d.cts"
       ],
       "node-redis": [
-        "./dist/node-redis.d.ts"
+        "./dist/node-redis.d.cts"
       ],
       "mongo": [
-        "./dist/mongo.d.ts"
+        "./dist/mongo.d.cts"
       ],
       "postgres": [
-        "./dist/postgres.d.ts"
+        "./dist/postgres.d.cts"
       ],
       "memory": [
-        "./dist/memory.d.ts"
+        "./dist/memory.d.cts"
       ],
       "testing": [
-        "./dist/testing.d.ts"
+        "./dist/testing.d.cts"
       ]
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "type:check": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -134,7 +134,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "check:package": "publint && attw --pack .",
+    "check:package": "npm run build && attw --pack .",
     "compose": "docker compose up -d"
   },
   "peerDependencies": {
@@ -163,21 +163,24 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
-    "@biomejs/biome": "^2.5.13",
-    "@types/node": "^25.0.3",
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^22.20.3",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "^4.1.11",
-    "ioredis": "5.8.2",
+    "@vitest/coverage-v8": "^5.0.1",
+    "ioredis": "6.0.0",
     "locco-v1": "npm:@kontsedal/locco@1.0.0",
-    "mongodb": "7.0.0",
+    "mongodb": "7.6.0",
     "pg": "^8.23.0",
     "publint": "^0.3.24",
     "redis": "^6.2.1",
-    "tsup": "^8.5.1",
+    "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.1"
   },
   "bin": {
     "locco-migrate-v2": "./scripts/codemod-v1-to-v2.mjs"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
   }
 }

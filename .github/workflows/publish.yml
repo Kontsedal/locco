@@ -32,8 +32,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -49,7 +49,7 @@ jobs:
       - run: npm run lint
       - run: npm run type:check
       - run: npm run test:run
-      - run: npm run build
+      # Builds first, so publint and attw always read a fresh dist rather than a stale one.
       - run: npm run check:package
       - name: Pick the dist-tag
         id: dist
