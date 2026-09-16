@@ -30,7 +30,7 @@ function setup(options: Partial<LockerOptions> = {}) {
   return { adapter, events, locker, types };
 }
 
-type SlowMethod = 'acquire' | 'extend';
+type SlowMethod = 'acquire' | 'extend' | 'release';
 
 /** Wraps an adapter so one method answers only after `ms` of fake time. `calls` limits it to the first calls. */
 function slowAdapter(adapter: LockAdapter, method: SlowMethod, ms: number, calls = Infinity) {
@@ -86,18 +86,20 @@ describe('Locker constructor', () => {
     expect(() => new Locker({ adapter })).not.toThrow();
   });
 
-  it('uses a monotonic clock by default', async () => {
+  it('uses a monotonic clock by default, not the wall clock', async () => {
     vi.useRealTimers();
-    const locker = new Locker({ adapter: new InMemoryAdapter() });
-    const before = Date.now;
-    Date.now = () => before() - 3_600_000;
+    // A wall clock that runs backwards. A lock that read it would never see its lease end.
+    const realNow = Date.now;
+    const base = realNow();
+    Date.now = () => base - (realNow() - base) * 2;
     try {
+      const locker = new Locker({ adapter: new InMemoryAdapter() });
       const lock = await locker.acquire('k', { ttl: 50 });
       expect(lock.state).toBe('held');
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await new Promise((resolve) => setTimeout(resolve, 90));
       expect(lock.state).toBe('lost');
     } finally {
-      Date.now = before;
+      Date.now = realNow;
     }
   });
 });
@@ -299,6 +301,39 @@ describe('Lock', () => {
     await expect(lock.release()).resolves.toBe(true);
     expect(spy).toHaveBeenCalledTimes(2);
     expect(lock.state).toBe('released');
+  });
+
+  it('keeps watching the lease while a release is in flight', async () => {
+    // The release request stalls before it reaches the backend, so the lease ends on the way.
+    const memory = new InMemoryAdapter({ now: () => Date.now() });
+    const adapter: LockAdapter = {
+      acquire: (p) => memory.acquire(p),
+      extend: (p) => memory.extend(p),
+      isHeld: (p) => memory.isHeld(p),
+      release: async (p) => {
+        await wait(500);
+        return memory.release(p);
+      },
+    };
+    const events: LockEvent[] = [];
+    const locker = new Locker({
+      adapter,
+      now: () => Date.now(),
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+    const lock = await locker.acquire('k', { ttl: 200 });
+    const pending = lock.release();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(lock.state).toBe('lost');
+    expect(lock.lostReason).toBe('expired');
+    expect(lock.signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(pending).resolves.toBe(false);
+    expect(lock.state).toBe('released');
+    expect(lock.lostReason).toBe('expired');
+    expect(events.filter((event) => event.type === 'lost')).toHaveLength(1);
   });
 
   it('shares one in-flight release between concurrent callers', async () => {
@@ -643,11 +678,11 @@ describe('acquireMany', () => {
     expect(blocker.state).toBe('held');
   });
 
-  it('shares one timeout across the keys', async () => {
-    const { locker } = setup();
-    await locker.acquire('c', { ttl: TTL });
+  it('shares one timeout across the keys and rolls back before the leases end', async () => {
+    const { locker, events } = setup();
+    await locker.acquire('c', { ttl: 60_000 });
     const pending = locker.acquireMany(['a', 'b', 'c'], {
-      ttl: TTL,
+      ttl: 60_000,
       retry: { retries: Number.POSITIVE_INFINITY, delay: 100, timeout: 250 },
     });
     const failure = pending.catch((error: unknown) => error);
@@ -657,7 +692,63 @@ describe('acquireMany', () => {
       reason: 'timeout',
       key: 'c',
     });
+    const released = events.filter((event) => event.type === 'released').map((event) => event.key);
+    expect(released.sort()).toEqual(['a', 'b']);
     await expect(locker.tryAcquire('a', { ttl: TTL })).resolves.not.toBeNull();
+  });
+
+  it('fails the set when a member is lost while a slower member is still being refreshed', async () => {
+    const memory = new InMemoryAdapter({ now: () => Date.now() });
+    const tokens: Record<string, string> = {};
+    const adapter: LockAdapter = {
+      acquire: (p) => {
+        tokens[p.key] = p.token;
+        return memory.acquire(p);
+      },
+      release: (p) => memory.release(p),
+      isHeld: (p) => memory.isHeld(p),
+      extend: async (p) => {
+        const answer = await memory.extend(p);
+        if (p.key === 'b') {
+          await wait(150);
+        }
+        return answer;
+      },
+    };
+    const locker = new Locker({ adapter, now: () => Date.now(), retry: { retries: 0 } });
+    const pending = locker.acquireMany(['a', 'b'], {
+      ttl: 200,
+      autoExtend: { interval: 50, maxHold: 10_000 },
+    });
+    const failure = pending.catch((error: unknown) => error);
+    // Someone takes "a" away while "b" is still being refreshed. The heartbeat of "a" notices.
+    await vi.advanceTimersByTimeAsync(25);
+    await memory.release({ key: 'a', token: tokens.a ?? '' });
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(failure).resolves.toMatchObject({
+      code: 'LOCK_HELD',
+      reason: 'expired',
+      key: 'a',
+    });
+    await expect(memory.acquire({ key: 'b', token: 'other', ttl: TTL })).resolves.toBe(true);
+  });
+
+  it('honours an abort that arrives during the refresh', async () => {
+    const memory = new InMemoryAdapter({ now: () => Date.now() });
+    const locker = new Locker({
+      adapter: slowAdapter(memory, 'extend', 200),
+      now: () => Date.now(),
+      retry: { retries: 0 },
+    });
+    const controller = new AbortController();
+    const pending = locker.acquireMany(['a', 'b'], { ttl: TTL, signal: controller.signal });
+    const failure = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    controller.abort(new Error('cancelled'));
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(failure).resolves.toMatchObject({ message: 'cancelled' });
+    await expect(memory.acquire({ key: 'a', token: 'other', ttl: TTL })).resolves.toBe(true);
+    await expect(memory.acquire({ key: 'b', token: 'other', ttl: TTL })).resolves.toBe(true);
   });
 
   it('does not start a later key after the deadline passed during an earlier attempt', async () => {

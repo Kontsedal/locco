@@ -29,7 +29,7 @@ export type ResolvedRetry = {
 export type AutoExtendOptions = {
   /** Milliseconds between extensions. Defaults to a third of the TTL. Must be smaller than the TTL. */
   interval?: number;
-  /** Hard deadline on ownership in milliseconds from acquisition. The lease never ends after it. */
+  /** Deadline on ownership in milliseconds from acquisition. The local lease ends at it; the backend lease can outlive it by the time the last extension spent in flight. */
   maxHold: number;
 };
 

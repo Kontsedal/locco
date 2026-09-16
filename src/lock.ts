@@ -133,24 +133,20 @@ export class Lock implements AsyncDisposable {
   }
 
   async #release(): Promise<boolean> {
-    const wasLost = this.#state === 'lost';
-    this.#clearTimers();
-    let released: boolean;
-    try {
-      released = await this.#adapter.release({ key: this.key, token: this.token });
-    } catch (error) {
-      // The backend did not answer, so the key may still exist. Keep the state so a later call
-      // can try again, and keep watching the local expiry.
-      if (this.#state === 'held') {
-        this.#scheduleExpiry();
-      }
-      throw error;
-    }
+    // The heartbeat stops now. The expiry watch stays armed, because a release that stalls must
+    // not leave a handle that says `held` after the backend lease ended.
+    clearTimeout(this.#heartbeatTimer);
+    this.#heartbeatTimer = undefined;
+    // When the backend throws, the key may still exist. The state stays as it is, so a later
+    // call can try again.
+    const released = await this.#adapter.release({ key: this.key, token: this.token });
+    const lostMeanwhile = this.#state === 'lost';
     this.#state = 'released';
+    this.#clearTimers();
     const heldMs = this.#heldMs();
     if (released) {
       this.#emit({ type: 'released', key: this.key, ttl: this.#ttl, heldMs });
-    } else if (!wasLost) {
+    } else if (!lostMeanwhile) {
       this.#lostReason = 'release';
       this.#emit({ type: 'lost', key: this.key, ttl: this.#ttl, heldMs, reason: 'release' });
       this.#abort.abort(new LockLostError({ key: this.key, reason: 'release' }));
@@ -196,14 +192,22 @@ export class Lock implements AsyncDisposable {
         }
         throw this.#abort.signal.reason;
       }
-      // The last extension is clamped, so the lease cannot end after the deadline by more than
-      // the network latency of this request.
-      ttl = Math.min(ttl, Math.ceil(untilDeadline));
+      // The last extension is clamped to whole milliseconds below the deadline, so the backend
+      // lease cannot outlive it by more than the time this request spends in flight.
+      ttl = Math.min(ttl, Math.floor(untilDeadline));
+      if (ttl <= 0) {
+        this.#markLost('max-hold');
+        if (fromHeartbeat) {
+          return;
+        }
+        throw this.#abort.signal.reason;
+      }
     }
     // A shorter lease takes effect on the backend before the answer arrives, so the local
     // estimate must not outlive it. It is lengthened only after the answer.
-    if (startedAt + ttl < this.#expiresAt) {
-      this.#expiresAt = startedAt + ttl;
+    const leaseEnd = deadline === undefined ? startedAt + ttl : Math.min(startedAt + ttl, deadline);
+    if (leaseEnd < this.#expiresAt) {
+      this.#expiresAt = leaseEnd;
       this.#scheduleExpiry();
     }
     let extended: boolean;
@@ -229,7 +233,7 @@ export class Lock implements AsyncDisposable {
       throw this.#abort.signal.reason;
     }
     this.#ttl = ttl;
-    this.#expiresAt = startedAt + ttl;
+    this.#expiresAt = leaseEnd;
     this.#scheduleExpiry();
     if (!fromHeartbeat) {
       this.#scheduleHeartbeat();

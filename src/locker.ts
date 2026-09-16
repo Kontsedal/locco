@@ -180,7 +180,9 @@ export class Locker {
           await this.#acquireWithRetry({ key: this.#fullKey(key), ...normalized }, deadline),
         );
       }
+      normalized.signal?.throwIfAborted();
       await this.#refreshSet(locks, normalized.ttl, startedAt, deadline);
+      normalized.signal?.throwIfAborted();
       return new LockSet(locks, (event) => this.#emit(event));
     } catch (error) {
       await Promise.all(locks.map((lock) => this.#releaseQuietly(lock)));
@@ -244,6 +246,8 @@ export class Locker {
         throw new LockHeldError({ key, attempts: attempt + 1, elapsedMs, reason: 'retries' });
       }
       const delay = await this.#delayFor(retry, attempt, elapsedMs, previousDelay);
+      // A slow delay function cannot be interrupted, so the signal is read again after it.
+      signal?.throwIfAborted();
       if (deadline !== undefined && this.#now() + delay >= deadline) {
         throw new LockHeldError({ key, attempts: attempt + 1, elapsedMs, reason: 'timeout' });
       }
@@ -323,17 +327,25 @@ export class Locker {
     const failed = results.findIndex((result) => result.status === 'rejected');
     if (failed !== -1) {
       const failure = results[failed];
-      const lock = locks[failed];
       if (failure?.status === 'rejected' && !(failure.reason instanceof LockLostError)) {
         throw failure.reason;
       }
-      throw new LockHeldError({
-        key: lock?.key ?? lastKey,
-        attempts: locks.length,
-        elapsedMs: this.#elapsed(startedAt),
-        reason: 'expired',
-      });
+      throw this.#setExpired(locks[failed]?.key ?? lastKey, locks.length, startedAt);
     }
+    // A member can be lost while a slower member was still being refreshed.
+    const lost = locks.find((lock) => lock.state !== 'held');
+    if (lost) {
+      throw this.#setExpired(lost.key, locks.length, startedAt);
+    }
+  }
+
+  #setExpired(key: string, attempts: number, startedAt: number): LockHeldError {
+    return new LockHeldError({
+      key,
+      attempts,
+      elapsedMs: this.#elapsed(startedAt),
+      reason: 'expired',
+    });
   }
 
   async #releaseQuietly(lock: Lock): Promise<void> {

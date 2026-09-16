@@ -30,7 +30,7 @@ export function runLockAdapterContract(
   const racers = options.racers ?? 40;
   const afterExpiry = ttl + Math.max(50, Math.floor(ttl / 4));
   // A race must not take longer than the lease, or a second winner is legitimate.
-  const raceTtl = Math.max(ttl * 20, 10_000);
+  const raceTtl = Math.max(ttl * 20, 60_000);
 
   describe(`${name} lock adapter contract`, () => {
     let subject: AdapterUnderTest;

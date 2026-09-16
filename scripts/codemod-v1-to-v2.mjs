@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // Rewrites the one literal 1.x call shape to 2.0 and reports every site it did not touch.
-//   npx -p @kontsedal/locco locco-migrate-v2 [--write] <file>...
+//   npx locco-migrate-v2 [--write] <file>...
+// It parses each file with the TypeScript package of your project, so text inside a string, a
+// comment or a regular expression is never touched.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
 const args = process.argv.slice(2);
 const write = args.includes('--write');
@@ -12,8 +16,9 @@ if (files.length === 0 || args.includes('--help') || args.includes('-h')) {
   process.exit(2);
 }
 
+const ts = loadTypeScript();
+
 const MANUAL_PATTERNS = [
-  ['.lock(', 'a Locker.lock() call the codemod did not rewrite'],
   ['retryDelayFn', 'retryDelayFn: the context fields changed and stop() is gone'],
   ['setRetrySettings', 'setRetrySettings that the codemod did not rewrite'],
   ['uniqueValue', 'uniqueValue is now token'],
@@ -33,12 +38,15 @@ let manual = 0;
 
 for (const file of files) {
   const source = readFileSync(file, 'utf8');
-  const { output, count } = rewrite(source);
+  const { output, count, leftover } = rewrite(file, source);
   rewritten += count;
   if (write && count > 0) {
     writeFileSync(file, output);
   }
-  const report = findManual(output);
+  const report = [
+    ...leftover.map((line) => `line ${line}: a Locker.lock() call the codemod did not rewrite`),
+    ...findManual(output),
+  ];
   manual += report.length;
   if (count > 0 || report.length > 0) {
     console.log(`${file}: ${count} site(s) rewritten`);
@@ -53,105 +61,129 @@ if (!write && rewritten > 0) {
   console.log('Run again with --write to change the files.');
 }
 
-/** Walks the code and skips strings and comments, so text inside them is never rewritten. */
-function rewrite(source) {
-  let output = '';
-  let copied = 0;
-  let count = 0;
-  let i = 0;
-  while (i < source.length) {
-    const char = source[i];
-    const next = source[i + 1];
-    if (char === '/' && next === '/') {
-      const end = source.indexOf('\n', i);
-      i = end === -1 ? source.length : end;
-      continue;
-    }
-    if (char === '/' && next === '*') {
-      const end = source.indexOf('*/', i + 2);
-      i = end === -1 ? source.length : end + 2;
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      i = endOfString(source, i);
-      continue;
-    }
-    if (source.startsWith('.lock(', i)) {
-      const site = parseSite(source, i);
-      if (site) {
-        output += source.slice(copied, i) + site.replacement;
-        copied = site.end;
-        i = site.end;
-        count += 1;
-        continue;
-      }
-    }
-    i += 1;
+function loadTypeScript() {
+  try {
+    return createRequire(path.join(process.cwd(), 'package.json'))('typescript');
+  } catch {
+    console.error('locco-migrate-v2 needs the "typescript" package in your project.');
+    process.exit(2);
   }
-  output += source.slice(copied);
-  return { output, count };
 }
 
-/** Matches `.lock(KEY, TTL)[.setRetrySettings({...})].acquire()` and returns the 2.0 text. */
-function parseSite(source, start) {
-  const lockArgs = balanced(source, start + 5);
-  if (!lockArgs) {
+function rewrite(file, source) {
+  const sourceFile = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(file),
+  );
+  const edits = [];
+  const leftover = [];
+  const visit = (node) => {
+    const site = matchSite(node, sourceFile);
+    if (site) {
+      edits.push(site);
+      return;
+    }
+    if (isLockCall(node)) {
+      leftover.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  let output = source;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
+  }
+  return { output, count: edits.length, leftover };
+}
+
+function scriptKind(file) {
+  if (file.endsWith('.tsx')) {
+    return ts.ScriptKind.TSX;
+  }
+  if (file.endsWith('.jsx')) {
+    return ts.ScriptKind.JSX;
+  }
+  if (/\.(m|c)?js$/.test(file)) {
+    return ts.ScriptKind.JS;
+  }
+  return ts.ScriptKind.TS;
+}
+
+/** Matches `X.lock(KEY, TTL)[.setRetrySettings({...})].acquire()` and returns the 2.0 text. */
+function matchSite(node, sourceFile) {
+  if (!ts.isCallExpression(node) || node.arguments.length !== 0) {
     return undefined;
   }
-  const parts = splitTopLevel(lockArgs.inner);
-  if (parts.length !== 2) {
+  const acquire = node.expression;
+  if (!ts.isPropertyAccessExpression(acquire) || acquire.name.text !== 'acquire') {
     return undefined;
   }
-  const [key, ttl] = parts.map((part) => part.trim());
-  let cursor = lockArgs.end;
-  let retry = '';
-  const settingsCall = '.setRetrySettings(';
-  if (source.startsWith(settingsCall, skipSpace(source, cursor))) {
-    const open = skipSpace(source, cursor) + settingsCall.length - 1;
-    const settings = balanced(source, open);
-    if (!settings) {
+  let target = acquire.expression;
+  let retry;
+  if (isMethodCall(target, 'setRetrySettings')) {
+    if (target.arguments.length !== 1) {
       return undefined;
     }
-    retry = translateSettings(settings.inner.trim());
+    retry = translateSettings(target.arguments[0], sourceFile);
     if (retry === undefined) {
       return undefined;
     }
-    cursor = settings.end;
+    target = target.expression.expression;
   }
-  const acquireAt = skipSpace(source, cursor);
-  if (!source.startsWith('.acquire()', acquireAt)) {
+  if (!isLockCall(target)) {
     return undefined;
   }
-  const options = retry ? `{ ttl: ${ttl}, retry: ${retry} }` : `{ ttl: ${ttl} }`;
-  return { replacement: `.acquire(${key}, ${options})`, end: acquireAt + '.acquire()'.length };
+  const [key, ttl] = target.arguments;
+  const receiver = target.expression.expression.getText(sourceFile);
+  const ttlText = ttl.getText(sourceFile);
+  const options = retry ? `{ ttl: ${ttlText}, retry: ${retry} }` : `{ ttl: ${ttlText} }`;
+  return {
+    start: node.getStart(sourceFile),
+    end: node.getEnd(),
+    text: `${receiver}.acquire(${key.getText(sourceFile)}, ${options})`,
+  };
+}
+
+function isMethodCall(node, name) {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === name
+  );
+}
+
+function isLockCall(node) {
+  return isMethodCall(node, 'lock') && node.arguments.length === 2;
 }
 
 /** Turns a literal `{ retryTimes: N, retryDelay: D, totalTime: T }` into a 2.0 retry object. */
-function translateSettings(text) {
-  if (!text.startsWith('{') || !text.endsWith('}')) {
+function translateSettings(node, sourceFile) {
+  if (!ts.isObjectLiteralExpression(node)) {
     return undefined;
   }
-  const fields = splitTopLevel(text.slice(1, -1))
-    .map((field) => field.trim())
-    .filter(Boolean);
   const out = [];
   let retries;
   let delay;
-  for (const field of fields) {
-    const match = /^(retryTimes|retryDelay|totalTime)\s*:\s*([\s\S]+)$/.exec(field);
-    if (!match) {
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) {
       return undefined;
     }
-    const [, name, value] = match;
+    const name = property.name.text;
+    const value = property.initializer;
     if (name === 'retryTimes') {
-      if (!/^\d+$/.test(value.trim())) {
+      if (!ts.isNumericLiteral(value)) {
         return undefined;
       }
-      retries = Math.max(0, Number(value) - 1);
+      retries = Math.max(0, Number(value.text) - 1);
     } else if (name === 'retryDelay') {
-      delay = value.trim();
+      delay = value.getText(sourceFile);
+    } else if (name === 'totalTime') {
+      out.push(`timeout: ${value.getText(sourceFile)}`);
     } else {
-      out.push(`timeout: ${value.trim()}`);
+      return undefined;
     }
   }
   if (retries !== undefined) {
@@ -164,9 +196,8 @@ function translateSettings(text) {
 }
 
 function findManual(source) {
-  const lines = source.split('\n');
   const report = [];
-  lines.forEach((line, number) => {
+  source.split('\n').forEach((line, number) => {
     for (const [needle, hint] of MANUAL_PATTERNS) {
       if (line.includes(needle)) {
         report.push(`line ${number + 1}: ${hint}`);
@@ -174,108 +205,4 @@ function findManual(source) {
     }
   });
   return report;
-}
-
-/** Returns the index after the string that opens at `start`. A template's `${}` is skipped whole. */
-function endOfString(source, start) {
-  const quote = source[start];
-  for (let i = start + 1; i < source.length; i += 1) {
-    const char = source[i];
-    if (char === '\\') {
-      i += 1;
-      continue;
-    }
-    if (char === quote) {
-      return i + 1;
-    }
-    if (quote === '`' && char === '$' && source[i + 1] === '{') {
-      let depth = 0;
-      for (i += 1; i < source.length; i += 1) {
-        if (source[i] === '{') {
-          depth += 1;
-        } else if (source[i] === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            break;
-          }
-        }
-      }
-    }
-  }
-  return source.length;
-}
-
-/** Returns the text inside the parentheses that open at `open`, and the index after the close. */
-function balanced(source, open) {
-  if (source[open] !== '(') {
-    return undefined;
-  }
-  let depth = 0;
-  let quote;
-  for (let i = open; i < source.length; i += 1) {
-    const char = source[i];
-    if (quote) {
-      if (char === '\\') {
-        i += 1;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-    } else if (char === '(' || char === '{' || char === '[') {
-      depth += 1;
-    } else if (char === ')' || char === '}' || char === ']') {
-      depth -= 1;
-      if (depth === 0) {
-        return { inner: source.slice(open + 1, i), end: i + 1 };
-      }
-    }
-  }
-  return undefined;
-}
-
-function splitTopLevel(text) {
-  const parts = [];
-  let depth = 0;
-  let quote;
-  let current = '';
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (quote) {
-      current += char;
-      if (char === '\\') {
-        current += text[i + 1] ?? '';
-        i += 1;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-    } else if (char === '(' || char === '{' || char === '[') {
-      depth += 1;
-    } else if (char === ')' || char === '}' || char === ']') {
-      depth -= 1;
-    } else if (char === ',' && depth === 0) {
-      parts.push(current);
-      current = '';
-      continue;
-    }
-    current += char;
-  }
-  if (current.trim()) {
-    parts.push(current);
-  }
-  return parts;
-}
-
-function skipSpace(source, index) {
-  let i = index;
-  while (i < source.length && /\s/.test(source[i])) {
-    i += 1;
-  }
-  return i;
 }
