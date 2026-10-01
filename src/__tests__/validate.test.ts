@@ -66,8 +66,10 @@ describe('validate', () => {
   it('assertAutoExtend enforces the interval margin and the hold deadline', () => {
     expect(() => assertAutoExtend({ maxHold: 1000 }, 100)).not.toThrow();
     expect(() => assertAutoExtend({ interval: 30, maxHold: 1000 }, 100)).not.toThrow();
-    expect(() => assertAutoExtend({ interval: 100, maxHold: 1000 }, 100)).toThrow(
-      /interval must be smaller/,
+    expect(() => assertAutoExtend({ interval: 50, maxHold: 1000 }, 100)).not.toThrow();
+    // An interval past half the TTL leaves an extension too little time to come back.
+    expect(() => assertAutoExtend({ interval: 51, maxHold: 1000 }, 100)).toThrow(
+      /interval must be at most half the ttl/,
     );
     expect(() => assertAutoExtend({ maxHold: 50 }, 100)).toThrow(/at least ttl/);
   });

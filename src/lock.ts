@@ -1,5 +1,5 @@
 import type { LockAdapter } from './adapter';
-import { LoccoError, LockLostError, type LockLostReason, LockStateError } from './errors';
+import { LockLostError, type LockLostReason, LockStateError } from './errors';
 import type { LockEvent, ResolvedRetry } from './types';
 import { assertDuration } from './validate';
 
@@ -37,7 +37,27 @@ type Heartbeat = {
   deadline: number;
 };
 
+/**
+ * How long a lease of `ttl` milliseconds counts as ours on the holder's clock. It ends 1% early,
+ * rounded down, so a holder clock that runs slower than the backend's cannot outlive the backend
+ * lease. Redlock uses the same factor.
+ */
+export function leaseValidity(ttl: number): number {
+  return ttl - Math.floor(ttl / 100);
+}
+
+/**
+ * Package-internal; the entry point does not export it. Stops the heartbeat of a lock whose
+ * release threw where nobody is left to try again, so the lease runs out on its own instead of
+ * being renewed until the hold deadline.
+ */
+export let abandonLock: (lock: Lock) => void;
+
 export class Lock implements AsyncDisposable {
+  static {
+    abandonLock = (lock) => lock.#abandon();
+  }
+
   readonly key: string;
   readonly token: string;
   readonly retry: ResolvedRetry;
@@ -45,7 +65,17 @@ export class Lock implements AsyncDisposable {
   #ttl: number;
   #state: LockState = 'held';
   #lostReason: LockLostReason | undefined;
+  /** Where the last confirmed lease ends on the local clock. */
   #expiresAt: number;
+  /** When the request for that lease left. The heartbeat counts its interval from here. */
+  #leaseStartedAt: number;
+  /** The last confirmed lease runs to the hold deadline, so there is nothing left to extend. */
+  #finalLease: boolean;
+  /** The latest extend request that threw, until one succeeds. A loss at expiry carries it. */
+  #extendError: { error: unknown } | undefined;
+  /** An extend request is waiting for its answer. A lease that runs out meanwhile ends `late-extend`. */
+  #extending = false;
+  #abandoned = false;
   readonly #acquiredAt: number;
   /** Frozen the moment the lock stops being held, so `heldMs` stops counting there. */
   #endedAt: number | undefined;
@@ -65,7 +95,9 @@ export class Lock implements AsyncDisposable {
     this.retry = init.retry;
     this.#ttl = init.ttl;
     this.#acquiredAt = init.acquiredAt;
-    this.#expiresAt = init.acquiredAt + init.ttl;
+    this.#leaseStartedAt = init.acquiredAt;
+    this.#expiresAt = init.acquiredAt + leaseValidity(init.ttl);
+    this.#finalLease = init.heartbeat !== undefined && init.heartbeat.maxHold <= init.ttl;
     this.#adapter = init.adapter;
     this.#now = init.now;
     this.#emit = init.emit;
@@ -85,21 +117,25 @@ export class Lock implements AsyncDisposable {
   }
 
   get state(): LockState {
+    this.#checkExpiry();
     return this.#state;
   }
 
   /** Why the lock was lost, or undefined when it was never lost. */
   get lostReason(): LockLostReason | undefined {
+    this.#checkExpiry();
     return this.#lostReason;
   }
 
   /** How long the lock was held, in milliseconds. Stops counting once it is lost or released. */
   get heldMs(): number {
+    this.#checkExpiry();
     return this.#heldMs();
   }
 
-  /** Aborts on every known loss: a failed, late or refused extension, a local lease expiry, the hold deadline, a release or check that finds the key not ours. */
+  /** Aborts on every known loss: a refused or late extension, a local lease expiry, the hold deadline, a release or check that finds the key not ours. */
   get signal(): AbortSignal {
+    this.#checkExpiry();
     return this.#abort.signal;
   }
 
@@ -112,6 +148,7 @@ export class Lock implements AsyncDisposable {
     if (this.#state === 'released') {
       return Promise.resolve(false);
     }
+    this.#checkExpiry();
     if (!this.#releasing) {
       this.#releasing = this.#release().finally(() => {
         this.#releasing = undefined;
@@ -122,10 +159,12 @@ export class Lock implements AsyncDisposable {
 
   /**
    * Sets a new lease of `ttl` milliseconds from now, clamped to the hold deadline. Throws
-   * LockLostError when the key was not ours, and the deadline error when the deadline has passed.
+   * LockLostError when the key was not ours or the deadline has passed. A driver error is thrown
+   * as it is and leaves the lock held until its current lease runs out.
    */
   async extend(ttl: number): Promise<void> {
     assertDuration(ttl, 'ttl');
+    this.#checkExpiry();
     this.#assertExtendable();
     await this.#queueExtend({ ttl, fromHeartbeat: false });
   }
@@ -133,14 +172,25 @@ export class Lock implements AsyncDisposable {
   /** One observation of the backend. A `false` while the lock is held marks it lost. */
   async isHeld(): Promise<boolean> {
     const held = await this.#adapter.isHeld({ key: this.key, token: this.token });
-    if (!held && this.#state === 'held') {
+    this.#checkExpiry();
+    // Our own release in flight deletes the key, so a `false` then says nothing about another holder.
+    if (!held && this.#state === 'held' && !this.#releasing) {
       this.#markLost('observed');
     }
     return held;
   }
 
+  /**
+   * Releases the lock. When the release throws, the heartbeat stops for good: nobody holds this
+   * handle after the block to try again, so the lease runs out on its own.
+   */
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.release();
+    try {
+      await this.release();
+    } catch (error) {
+      this.#abandon();
+      throw error;
+    }
   }
 
   async #release(): Promise<boolean> {
@@ -198,6 +248,8 @@ export class Lock implements AsyncDisposable {
   }
 
   async #extend({ ttl: requested, fromHeartbeat }: ExtendRequest): Promise<void> {
+    // A heartbeat that fires late, after a pause, must not extend a lease that already ran out.
+    this.#checkExpiry();
     if (this.#state !== 'held' || this.#releasing) {
       if (fromHeartbeat) {
         return;
@@ -206,45 +258,51 @@ export class Lock implements AsyncDisposable {
     }
     const startedAt = this.#now();
     let ttl = requested ?? this.#ttl;
+    let final = false;
     const deadline = this.#heartbeat?.deadline;
     if (deadline !== undefined) {
-      const untilDeadline = deadline - startedAt;
+      // Whole milliseconds below the deadline, so the backend lease cannot outlive it by more
+      // than the time this request spends in flight.
+      const untilDeadline = Math.floor(deadline - startedAt);
       if (untilDeadline <= 0) {
+        // A heartbeat tick catches this like any other failure, and stops on the lost state.
         this.#markLost('max-hold');
-        if (fromHeartbeat) {
-          return;
-        }
         throw this.#abort.signal.reason;
       }
-      // The last extension is clamped to whole milliseconds below the deadline, so the backend
-      // lease cannot outlive it by more than the time this request spends in flight.
-      ttl = Math.min(ttl, Math.floor(untilDeadline));
-      if (ttl <= 0) {
-        this.#markLost('max-hold');
-        if (fromHeartbeat) {
-          return;
-        }
-        throw this.#abort.signal.reason;
+      if (ttl >= untilDeadline) {
+        ttl = untilDeadline;
+        final = true;
       }
     }
     // A shorter lease takes effect on the backend before the answer arrives, so the local
     // estimate must not outlive it. It is lengthened only after the answer.
-    const leaseEnd = deadline === undefined ? startedAt + ttl : Math.min(startedAt + ttl, deadline);
+    const leaseEnd = startedAt + leaseValidity(ttl);
     if (leaseEnd < this.#expiresAt) {
       this.#expiresAt = leaseEnd;
       this.#scheduleExpiry();
     }
     let extended: boolean;
+    this.#extending = true;
     try {
       extended = await this.#adapter.extend({ key: this.key, token: this.token, ttl });
     } catch (error) {
-      // The backend did not answer, so the lease state is unknown. Treat it as lost, but under a
-      // reason of its own: the key was very likely still ours, and saying it was taken would send
-      // an operator hunting a double acquisition that never happened.
-      this.#markLost('extend-failed', error);
+      this.#extending = false;
+      // No answer, so nothing is known about the new lease. The lease confirmed before it still
+      // runs to its local end, so the lock stays held and a later extension can try again. A loss
+      // at that end carries this error as its cause.
+      if (this.#state === 'held' && !this.#releasing) {
+        this.#extendError = { error };
+        this.#emit({ type: 'extendFailed', key: this.key, ttl, heldMs: this.#heldMs(), error });
+      }
       throw error;
     }
-    if (this.#state !== 'held') {
+    // An answer that arrives after the local lease ran out cannot be used: both the old lease and
+    // the new one end no later than that. The loss is `late-extend`, which points at the backend.
+    this.#checkExpiry();
+    this.#extending = false;
+    if (this.#state !== 'held' || this.#releasing) {
+      // The lock ended, or our own release went out, while the request was in flight. A refusal
+      // then can be that release's doing, so the answer says nothing about another holder.
       if (fromHeartbeat) {
         return;
       }
@@ -254,12 +312,11 @@ export class Lock implements AsyncDisposable {
       this.#markLost('extend');
       throw this.#abort.signal.reason;
     }
-    if (this.#now() - startedAt >= ttl) {
-      this.#markLost('late-extend');
-      throw this.#abort.signal.reason;
-    }
     this.#ttl = ttl;
     this.#expiresAt = leaseEnd;
+    this.#leaseStartedAt = startedAt;
+    this.#finalLease = final;
+    this.#extendError = undefined;
     this.#scheduleExpiry();
     if (!fromHeartbeat) {
       this.#scheduleHeartbeat();
@@ -267,30 +324,40 @@ export class Lock implements AsyncDisposable {
     this.#emit({ type: 'extended', key: this.key, ttl, heldMs: this.#heldMs() });
   }
 
+  /** Only for a held lock. Every caller checks, and the end of holding clears the expiry timer. */
   #markLost(reason: LockLostReason, cause?: unknown): void {
-    if (this.#state !== 'held') {
-      return;
-    }
     this.#state = 'lost';
     this.#lostReason = reason;
     this.#endedAt = this.#now();
     this.#clearTimers();
     this.#emit({ type: 'lost', key: this.key, ttl: this.#ttl, heldMs: this.#heldMs(), reason });
-    const abortReason =
-      reason === 'max-hold'
-        ? new LoccoError(
-            `Lock "${this.key}" reached its hold deadline. The lease ends here and is not extended.`,
-            { code: 'LOCK_MAX_HOLD' },
-          )
-        : new LockLostError({ key: this.key, reason, cause });
-    this.#abort.abort(abortReason);
+    this.#abort.abort(new LockLostError({ key: this.key, reason, cause }));
   }
 
   #onLocalExpiry(): void {
-    const deadline = this.#heartbeat?.deadline;
-    const reason = deadline !== undefined && this.#expiresAt >= deadline ? 'max-hold' : 'expired';
-    // `#markLost` ignores a lock that is no longer held, so this needs no guard of its own.
-    this.#markLost(reason);
+    if (this.#finalLease) {
+      this.#markLost('max-hold');
+      return;
+    }
+    const failure = this.#extendError;
+    if (failure) {
+      this.#markLost('extend-failed', failure.error);
+      return;
+    }
+    this.#markLost(this.#extending ? 'late-extend' : 'expired');
+  }
+
+  /** The expiry timer can run late, after a pause or on a busy event loop, so a read checks the clock too. */
+  #checkExpiry(): void {
+    if (this.#state === 'held' && this.#now() >= this.#expiresAt) {
+      this.#onLocalExpiry();
+    }
+  }
+
+  #abandon(): void {
+    this.#abandoned = true;
+    clearTimeout(this.#heartbeatTimer);
+    this.#heartbeatTimer = undefined;
   }
 
   #scheduleExpiry(): void {
@@ -300,42 +367,47 @@ export class Lock implements AsyncDisposable {
     this.#expiryTimer.unref();
   }
 
-  #scheduleHeartbeat(): void {
-    const heartbeat = this.#heartbeat;
-    if (!heartbeat || this.#state !== 'held') {
+  /**
+   * The next tick runs one interval after the current lease was requested, not after its answer
+   * arrived, so a slow backend eats into the slack of one lease instead of piling up across them.
+   * `delay` overrides that for a retry.
+   */
+  #scheduleHeartbeat(delay?: number): void {
+    if (!this.#heartbeat || this.#state !== 'held' || this.#finalLease || this.#abandoned) {
       return;
     }
     clearTimeout(this.#heartbeatTimer);
-    // The heartbeat travels with the timer, so the tick needs no null check of its own.
+    const ms = Math.max(0, delay ?? this.#leaseStartedAt + this.#heartbeatInterval() - this.#now());
     this.#heartbeatTimer = setTimeout(() => {
-      void this.#heartbeatTick(heartbeat);
-    }, this.#heartbeatInterval());
+      void this.#heartbeatTick();
+    }, ms);
     this.#heartbeatTimer.unref();
   }
 
   #heartbeatInterval(): number {
     const explicit = this.#heartbeat?.interval;
-    if (explicit !== undefined && explicit < this.#ttl) {
+    // An explicit interval stands while it leaves half the lease for the request. A manual
+    // extension to a shorter TTL can break that, and the default takes over.
+    if (explicit !== undefined && explicit * 2 <= this.#ttl) {
       return explicit;
     }
     return Math.max(1, Math.floor(this.#ttl / 3));
   }
 
-  async #heartbeatTick(heartbeat: Heartbeat): Promise<void> {
+  async #heartbeatTick(): Promise<void> {
+    let retryIn: number | undefined;
     try {
       await this.#queueExtend({ fromHeartbeat: true });
     } catch {
-      // #extend already marked the lock lost and aborted the signal.
+      // A refusal or a late answer already ended the lock, and the schedule below stops there. A
+      // request that threw leaves the lock held, so the next attempt comes sooner than a tick.
+      retryIn = Math.max(1, Math.floor(this.#heartbeatInterval() / 3));
+    }
+    // A release in flight cleared the timer, and puts it back itself if it throws.
+    if (this.#releasing) {
       return;
     }
-    if (this.#state !== 'held') {
-      return;
-    }
-    // The lease now reaches the hold deadline, so there is nothing left to extend.
-    if (this.#expiresAt >= heartbeat.deadline) {
-      return;
-    }
-    this.#scheduleHeartbeat();
+    this.#scheduleHeartbeat(retryIn);
   }
 
   #clearTimers(): void {

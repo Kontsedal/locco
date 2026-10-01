@@ -19,12 +19,37 @@ export class LockSet implements AsyncDisposable {
    * false when any key was already gone. A second call answers false, like `Lock.release`.
    * Every failure gets a `releaseFailed` event, and the first error is then thrown.
    */
-  async release(): Promise<boolean> {
+  release(): Promise<boolean> {
+    return this.#releaseEach((lock) => lock.release());
+  }
+
+  /** Extends every lock. Throws the first failure after every extension has settled. */
+  async extend(ttl: number): Promise<void> {
+    assertDuration(ttl, 'ttl');
+    const results = await Promise.allSettled(this.locks.map((lock) => lock.extend(ttl)));
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) {
+      throw failure.reason;
+    }
+  }
+
+  /**
+   * Releases every lock the way `await using` releases one: a member whose release throws stops
+   * its heartbeat, because nobody holds the set after the block to try again.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.#releaseEach(async (lock) => {
+      await lock[Symbol.asyncDispose]();
+      return true;
+    });
+  }
+
+  async #releaseEach(release: (lock: Lock) => Promise<boolean>): Promise<boolean> {
     // Each outcome carries its own lock, so nothing has to line results up with the array by index.
     const outcomes = await Promise.all(
       this.locks.map(async (lock) => {
         try {
-          return { lock, released: await lock.release(), error: undefined };
+          return { lock, released: await release(lock), error: undefined };
         } catch (error) {
           return { lock, released: false, error };
         }
@@ -52,19 +77,5 @@ export class LockSet implements AsyncDisposable {
       throw firstError.error;
     }
     return allReleased;
-  }
-
-  /** Extends every lock. Throws the first failure after every extension has settled. */
-  async extend(ttl: number): Promise<void> {
-    assertDuration(ttl, 'ttl');
-    const results = await Promise.allSettled(this.locks.map((lock) => lock.extend(ttl)));
-    const failure = results.find((result) => result.status === 'rejected');
-    if (failure) {
-      throw failure.reason;
-    }
-  }
-
-  async [Symbol.asyncDispose](): Promise<void> {
-    await this.release();
   }
 }

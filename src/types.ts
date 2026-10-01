@@ -27,9 +27,9 @@ export type ResolvedRetry = {
 };
 
 export type AutoExtendOptions = {
-  /** Milliseconds between extensions. Defaults to a third of the TTL. Must be smaller than the TTL. */
+  /** Milliseconds between extensions. Defaults to a third of the TTL. At most half the TTL. */
   interval?: number;
-  /** Deadline on ownership in milliseconds from acquisition. The local lease ends at it; the backend lease can outlive it by the time the last extension spent in flight. */
+  /** Deadline on ownership in milliseconds from acquisition. The local lease ends no later than it; the backend lease can outlive it by the time the last extension spent in flight. */
   maxHold: number;
 };
 
@@ -68,6 +68,7 @@ export type LockEvent =
       reason: ContendedReason;
     })
   | (LockEventBase & { type: 'extended'; heldMs: number })
+  | (LockEventBase & { type: 'extendFailed'; heldMs: number; error: unknown })
   | (LockEventBase & { type: 'released'; heldMs: number })
   | (LockEventBase & { type: 'lost'; heldMs: number; reason: LockLostReason })
   | (LockEventBase & { type: 'releaseFailed'; heldMs: number; error: unknown });

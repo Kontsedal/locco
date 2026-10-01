@@ -39,7 +39,12 @@ describe('errors', () => {
     });
     expect(new LockStateError('x').code).toBe('LOCK_STATE');
     expect(new ValidationError('x').code).toBe('LOCK_VALIDATION');
-    expect(new LoccoError('x', { code: 'LOCK_MAX_HOLD' }).code).toBe('LOCK_MAX_HOLD');
+    expect(new LoccoError('x', { code: 'LOCK_HELD' }).code).toBe('LOCK_HELD');
+    // Every loss is one class, the hold deadline included, so one `instanceof` covers them all.
+    expect(new LockLostError({ key: 'k', reason: 'max-hold' })).toMatchObject({
+      code: 'LOCK_LOST',
+      reason: 'max-hold',
+    });
   });
 
   it('keeps the cause and the callback result', () => {

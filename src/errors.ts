@@ -1,9 +1,4 @@
-export type LoccoErrorCode =
-  | 'LOCK_HELD'
-  | 'LOCK_LOST'
-  | 'LOCK_STATE'
-  | 'LOCK_MAX_HOLD'
-  | 'LOCK_VALIDATION';
+export type LoccoErrorCode = 'LOCK_HELD' | 'LOCK_LOST' | 'LOCK_STATE' | 'LOCK_VALIDATION';
 
 export class LoccoError extends Error {
   readonly code: LoccoErrorCode;
@@ -61,10 +56,10 @@ export type LockLostReason =
 const LOSS_MESSAGES: Record<LockLostReason, string> = {
   release: 'the key was gone or belonged to another holder at release',
   extend: 'the key was gone or belonged to another holder at extend',
-  // The request never got an answer, so the lease may well still be ours. Saying the key was
-  // taken would send an operator hunting a double acquisition that never happened.
-  'extend-failed': 'the extend request failed, so the state of the lease is unknown. See `cause`',
-  'late-extend': 'the extend answer arrived after the new lease had already run out',
+  // The requests never got an answer, so the lease may well still be ours on the backend. Saying
+  // the key was taken would send an operator hunting a double acquisition that never happened.
+  'extend-failed': 'the lease ran out while extend requests were failing. See `cause`',
+  'late-extend': 'the lease ran out while an extend request was still waiting for its answer',
   expired: 'the lease ran out before an extension refreshed it',
   'max-hold': 'the hold deadline passed',
   observed: 'a check found the key gone or owned by another holder',

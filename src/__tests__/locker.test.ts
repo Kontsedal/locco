@@ -2,70 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LockAdapter } from '../adapter';
 import { InMemoryAdapter } from '../adapters/inMemory';
 import {
-  LoccoError,
+  type LoccoError,
   LockHeldError,
   LockLostError,
   LockStateError,
   ValidationError,
 } from '../errors';
-import { Locker, type LockerOptions } from '../locker';
+import type { Lock } from '../lock';
+import { Locker } from '../locker';
 import { wait } from '../retry';
 import type { LockEvent } from '../types';
+import { setup, slowAdapter, slowSetup } from './harness';
 
 const TTL = 1000;
-
-function setup(options: Partial<LockerOptions> = {}) {
-  const adapter = new InMemoryAdapter({ now: () => Date.now() });
-  const events: LockEvent[] = [];
-  const locker = new Locker({
-    adapter,
-    now: () => Date.now(),
-    onEvent: (event) => {
-      events.push(event);
-    },
-    retry: { retries: 0 },
-    ...options,
-  });
-  const types = () => events.map((event) => event.type);
-  return { adapter, events, locker, types };
-}
-
-type SlowMethod = 'acquire' | 'extend' | 'release';
-
-/** Wraps an adapter so one method answers only after `ms` of fake time. `calls` limits it to the first calls. */
-function slowAdapter(adapter: LockAdapter, method: SlowMethod, ms: number, calls = Infinity) {
-  let remaining = calls;
-  const slow: LockAdapter = {
-    acquire: (p) => adapter.acquire(p),
-    release: (p) => adapter.release(p),
-    extend: (p) => adapter.extend(p),
-    isHeld: (p) => adapter.isHeld(p),
-    [method]: async (p: never) => {
-      const answer = await adapter[method](p);
-      if (remaining > 0) {
-        remaining -= 1;
-        await wait(ms);
-      }
-      return answer;
-    },
-  };
-  return slow;
-}
-
-function slowSetup(method: SlowMethod, ms: number, calls = Infinity) {
-  const memory = new InMemoryAdapter({ now: () => Date.now() });
-  const adapter = slowAdapter(memory, method, ms, calls);
-  const events: LockEvent[] = [];
-  const locker = new Locker({
-    adapter,
-    now: () => Date.now(),
-    retry: { retries: 0 },
-    onEvent: (event) => {
-      events.push(event);
-    },
-  });
-  return { memory, adapter, locker, events };
-}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -414,16 +363,25 @@ describe('Lock', () => {
     expect(lock.lostReason).toBe('expired');
   });
 
-  it('separates an extend the backend refused from an extend that never answered', async () => {
+  it('keeps the lock held when an extend throws, and names the failure if the lease runs out', async () => {
     const { adapter, locker, events } = setup();
     const lock = await locker.acquire('k', { ttl: TTL });
     vi.spyOn(adapter, 'extend').mockRejectedValueOnce(new Error('redis down'));
     await expect(lock.extend(TTL)).rejects.toThrow('redis down');
+    // The lease confirmed at acquisition still runs, so the lock is still ours until it ends.
+    expect(lock.state).toBe('held');
+    expect(events.at(-1)).toMatchObject({
+      type: 'extendFailed',
+      key: 'k',
+      ttl: TTL,
+      error: expect.objectContaining({ message: 'redis down' }),
+    });
+    await vi.advanceTimersByTimeAsync(TTL);
     // The key was very likely still ours. Saying it was taken would send an operator hunting a
     // double acquisition that never happened.
     expect(lock.lostReason).toBe('extend-failed');
     expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'extend-failed' });
-    expect((lock.signal.reason as LockLostError).message).toMatch(/state of the lease is unknown/);
+    expect((lock.signal.reason as LockLostError).message).toMatch(/extend requests were failing/);
     expect((lock.signal.reason as LockLostError).cause).toMatchObject({ message: 'redis down' });
   });
 
@@ -514,7 +472,7 @@ describe('Lock', () => {
     await expect(lock.extend(TTL)).rejects.toThrow(LockLostError);
   });
 
-  it('marks the lock lost when the extend answer arrives after the new lease', async () => {
+  it('marks the lock lost when the extend answer arrives after the lease ran out', async () => {
     // The clock jumps inside the adapter call, so no timer fires before the answer is handled.
     const memory = new InMemoryAdapter({ now: () => Date.now() });
     const adapter: LockAdapter = {
@@ -542,7 +500,8 @@ describe('Lock', () => {
     await vi.advanceTimersByTimeAsync(100);
     const pending = lock.extend(1000).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(200);
-    await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST', reason: 'expired' });
+    // The lease ran out while the answer was on its way, which points at the backend.
+    await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST', reason: 'late-extend' });
     expect(lock.state).toBe('lost');
   });
 
@@ -552,30 +511,34 @@ describe('Lock', () => {
     const pending = lock.extend(100).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(120);
     expect(lock.state).toBe('lost');
-    expect(lock.lostReason).toBe('expired');
+    expect(lock.lostReason).toBe('late-extend');
     await vi.advanceTimersByTimeAsync(100);
     await expect(pending).resolves.toMatchObject({ code: 'LOCK_LOST' });
   });
 
-  it('marks the lock lost and rethrows when the backend throws on extend', async () => {
+  it('forgets an extend failure once a later extend succeeds', async () => {
     const { adapter, locker } = setup();
     const lock = await locker.acquire('k', { ttl: TTL });
     vi.spyOn(adapter, 'extend').mockRejectedValueOnce(new Error('redis down'));
     await expect(lock.extend(TTL)).rejects.toThrow('redis down');
-    expect(lock.state).toBe('lost');
-    expect((lock.signal.reason as LockLostError).cause).toMatchObject({ message: 'redis down' });
+    await lock.extend(TTL);
+    await vi.advanceTimersByTimeAsync(TTL);
+    expect(lock.lostReason).toBe('expired');
+    expect((lock.signal.reason as LockLostError).cause).toBeUndefined();
   });
 
-  it('marks the lock lost at local lease expiry', async () => {
+  it('marks the lock lost at local lease expiry, 1% early', async () => {
+    // A holder clock that runs slower than the backend's must not outlive the backend lease, so
+    // the local lease ends 1% of the TTL early.
     const { locker, events } = setup();
     const lock = await locker.acquire('k', { ttl: 300 });
-    await vi.advanceTimersByTimeAsync(299);
+    await vi.advanceTimersByTimeAsync(296);
     expect(lock.state).toBe('held');
     await vi.advanceTimersByTimeAsync(1);
     expect(lock.state).toBe('lost');
     expect(lock.lostReason).toBe('expired');
     expect(lock.signal.reason).toMatchObject({ code: 'LOCK_LOST', reason: 'expired' });
-    expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'expired', heldMs: 300 });
+    expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'expired', heldMs: 297 });
   });
 
   it('answers isHeld from the backend and marks a lost lock', async () => {
@@ -659,8 +622,9 @@ describe('autoExtend', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(lock.state).toBe('lost');
     expect(lock.lostReason).toBe('max-hold');
-    expect(lock.signal.reason).toBeInstanceOf(LoccoError);
-    expect(lock.signal.reason).toMatchObject({ code: 'LOCK_MAX_HOLD' });
+    // The hold deadline is a loss like any other, so one `instanceof` check covers every ending.
+    expect(lock.signal.reason).toBeInstanceOf(LockLostError);
+    expect(lock.signal.reason).toMatchObject({ code: 'LOCK_LOST', reason: 'max-hold' });
     expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'max-hold' });
     await expect(adapter.isHeld({ key: 'k', token: lock.token })).resolves.toBe(false);
   });
@@ -674,13 +638,13 @@ describe('autoExtend', () => {
     expect(lock.state).toBe('lost');
     expect(lock.lostReason).toBe('max-hold');
     await expect(adapter.isHeld({ key: 'k', token: lock.token })).resolves.toBe(false);
-    await expect(lock.extend(100)).rejects.toMatchObject({ code: 'LOCK_MAX_HOLD' });
+    await expect(lock.extend(100)).rejects.toMatchObject({ code: 'LOCK_LOST', reason: 'max-hold' });
   });
 
-  it('rejects an interval that is not smaller than the ttl and a deadline under the ttl', async () => {
+  it('rejects an interval over half the ttl and a deadline under the ttl', async () => {
     const { locker } = setup();
     await expect(
-      locker.acquire('k', { ttl: 100, autoExtend: { interval: 100, maxHold: 1000 } }),
+      locker.acquire('k', { ttl: 100, autoExtend: { interval: 51, maxHold: 1000 } }),
     ).rejects.toThrow(ValidationError);
     await expect(locker.acquire('k', { ttl: 100, autoExtend: { maxHold: 50 } })).rejects.toThrow(
       ValidationError,
@@ -747,12 +711,27 @@ describe('withLock', () => {
     ).rejects.toMatchObject({ code: 'LOCK_LOST', reason: 'release', result: 'done' });
   });
 
-  it('throws the adapter error when the release throws after a good run', async () => {
-    const { adapter, locker } = setup();
+  it('returns the value when the release throws after a good run, and reports the failure', async () => {
+    // The work finished under a held lock. Throwing would hide that and invite a caller to run it
+    // a second time; the key only lingers until its lease runs out.
+    const { adapter, locker, events } = setup();
+    const extend = vi.spyOn(adapter, 'extend');
     vi.spyOn(adapter, 'release').mockRejectedValueOnce(new Error('redis down'));
-    await expect(locker.withLock('k', { ttl: TTL }, async () => 'done')).rejects.toThrow(
-      'redis down',
-    );
+    let held: Lock | undefined;
+    await expect(
+      locker.withLock('k', { ttl: 300, autoExtend: { maxHold: 60_000 } }, async (lock) => {
+        held = lock;
+        return 'charged';
+      }),
+    ).resolves.toBe('charged');
+    expect(events.at(-1)).toMatchObject({
+      type: 'releaseFailed',
+      error: expect.objectContaining({ message: 'redis down' }),
+    });
+    // Nobody can release the lock again, so it must not be renewed until the hold deadline.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(extend).not.toHaveBeenCalled();
+    expect(held?.lostReason).toBe('expired');
   });
 
   it('keeps the lock alive with autoExtend and hands the signal to the callback', async () => {
@@ -1065,7 +1044,10 @@ describe('extend bookkeeping', () => {
     const lock = await locker.acquire('k', { ttl: 1000, autoExtend: { maxHold: 1000 } });
     // Past the deadline on the lock's own clock, with no timer having run yet.
     clock.advance(1500);
-    await expect(lock.extend(1000)).rejects.toMatchObject({ code: 'LOCK_MAX_HOLD' });
+    await expect(lock.extend(1000)).rejects.toMatchObject({
+      code: 'LOCK_LOST',
+      reason: 'max-hold',
+    });
     expect(lock.lostReason).toBe('max-hold');
   });
 
@@ -1073,47 +1055,11 @@ describe('extend bookkeeping', () => {
     const clock = manualClock();
     const adapter = new InMemoryAdapter({ now: () => Date.now() });
     const locker = new Locker({ adapter, now: clock.now, retry: { retries: 0 } });
-    const lock = await locker.acquire('k', { ttl: 1000, autoExtend: { maxHold: 1000 } });
+    // Under 100 ms the 1% margin rounds to nothing, so the lease reaches the deadline exactly.
+    const lock = await locker.acquire('k', { ttl: 50, autoExtend: { maxHold: 50 } });
     // A sliver of the deadline is left, which floors to a zero-length lease.
-    clock.advance(999.5);
-    await expect(lock.extend(1000)).rejects.toMatchObject({ code: 'LOCK_MAX_HOLD' });
-    expect(lock.lostReason).toBe('max-hold');
-  });
-
-  it('lets a heartbeat past the hold deadline end quietly instead of throwing', async () => {
-    const clock = manualClock();
-    const adapter = new InMemoryAdapter({ now: () => Date.now() });
-    const events: LockEvent[] = [];
-    const locker = new Locker({
-      adapter,
-      now: clock.now,
-      retry: { retries: 0 },
-      onEvent: (event) => {
-        events.push(event);
-      },
-    });
-    const lock = await locker.acquire('k', {
-      ttl: 1000,
-      autoExtend: { interval: 100, maxHold: 1000 },
-    });
-    clock.advance(1500);
-    // The heartbeat timer, not a caller, finds the deadline gone. Nobody is there to catch.
-    await vi.advanceTimersByTimeAsync(100);
-    expect(lock.state).toBe('lost');
-    expect(lock.lostReason).toBe('max-hold');
-    expect(events.at(-1)).toMatchObject({ type: 'lost', reason: 'max-hold' });
-  });
-
-  it('lets a heartbeat whose clamped lease is under a millisecond end quietly', async () => {
-    const clock = manualClock();
-    const adapter = new InMemoryAdapter({ now: () => Date.now() });
-    const locker = new Locker({ adapter, now: clock.now, retry: { retries: 0 } });
-    const lock = await locker.acquire('k', {
-      ttl: 1000,
-      autoExtend: { interval: 100, maxHold: 1000 },
-    });
-    clock.advance(999.5);
-    await vi.advanceTimersByTimeAsync(100);
+    clock.advance(49.5);
+    await expect(lock.extend(50)).rejects.toMatchObject({ code: 'LOCK_LOST', reason: 'max-hold' });
     expect(lock.lostReason).toBe('max-hold');
   });
 
@@ -1212,13 +1158,13 @@ describe('extend bookkeeping', () => {
     await vi.advanceTimersByTimeAsync(100);
     const pending = lock.extend(5000).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(300);
-    // The expiry won the race, so the ending stays `expired` and the driver error still surfaces.
+    // The expiry won the race while the request was out, and the driver error still surfaces.
     await expect(pending).resolves.toMatchObject({ message: 'redis down' });
-    expect(lock.lostReason).toBe('expired');
+    expect(lock.lostReason).toBe('late-extend');
     expect(events.filter((event) => event.type === 'lost')).toHaveLength(1);
   });
 
-  it('stops the heartbeat when its own extend request throws', async () => {
+  it('retries a heartbeat whose extend throws until the lease runs out, then stops', async () => {
     const memory = new InMemoryAdapter({ now: () => Date.now() });
     const adapter: LockAdapter = {
       acquire: (p) => memory.acquire(p),
@@ -1242,9 +1188,15 @@ describe('extend bookkeeping', () => {
       autoExtend: { interval: 50, maxHold: 60_000 },
     });
     await vi.advanceTimersByTimeAsync(60);
+    // Most of the lease is left, so a failed request is no reason to give the lock up.
+    expect(lock.state).toBe('held');
+    await vi.advanceTimersByTimeAsync(240);
     expect(lock.lostReason).toBe('extend-failed');
+    const attempts = events.filter((event) => event.type === 'extendFailed').length;
+    expect(attempts).toBeGreaterThan(5);
     await vi.advanceTimersByTimeAsync(500);
-    // The tick swallowed the rejection and did not reschedule itself.
+    // The loss stopped the retries.
+    expect(events.filter((event) => event.type === 'extendFailed')).toHaveLength(attempts);
     expect(events.filter((event) => event.type === 'lost')).toHaveLength(1);
   });
 
@@ -1256,7 +1208,7 @@ describe('extend bookkeeping', () => {
     });
     await vi.advanceTimersByTimeAsync(600);
     expect(lock.state).toBe('lost');
-    expect(lock.lostReason).toBe('expired');
+    expect(lock.lostReason).toBe('late-extend');
     expect(events.filter((event) => event.type === 'extended')).toHaveLength(0);
   });
 });

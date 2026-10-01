@@ -6,7 +6,11 @@ type Entry = {
 };
 
 export type InMemoryAdapterOptions = {
-  /** Clock in milliseconds. Default Date.now. Tests replace it. */
+  /**
+   * Clock in milliseconds. Default `performance.now`: the backend lives in this process and pauses
+   * with it, and a wall-clock step must not end every lease at once while each holder still
+   * counts its lease as live. Pass `() => Date.now()` to follow fake timers.
+   */
   now?: () => number;
 };
 
@@ -17,7 +21,7 @@ export class InMemoryAdapter implements LockAdapter, Disposable {
   readonly #now: () => number;
 
   constructor(options: InMemoryAdapterOptions = {}) {
-    this.#now = options.now ?? Date.now;
+    this.#now = options.now ?? (() => performance.now());
   }
 
   async acquire({ key, token, ttl }: LockLeaseParams): Promise<boolean> {

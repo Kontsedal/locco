@@ -85,8 +85,10 @@ export function assertAutoExtend(
   const { interval, maxHold } = options as Partial<NormalizedAutoExtend>;
   if (interval !== undefined) {
     assertDuration(interval, 'autoExtend.interval');
-    if (interval >= ttl) {
-      throw new ValidationError('autoExtend.interval must be smaller than ttl');
+    // Each tick counts from the start of the lease it renews, so whatever the interval leaves of
+    // the TTL is the time an extension has to come back, and to be tried again if it throws.
+    if (interval * 2 > ttl) {
+      throw new ValidationError('autoExtend.interval must be at most half the ttl');
     }
   }
   if (maxHold === undefined) {

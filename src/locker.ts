@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { LockAdapter } from './adapter';
+import { createSystemClock } from './clock';
 import { LockHeldError, LockLostError, ValidationError } from './errors';
-import { type HeartbeatConfig, Lock } from './lock';
+import { abandonLock, type HeartbeatConfig, Lock, leaseValidity } from './lock';
 import { LockSet } from './lockSet';
 import { mergeRetry, wait } from './retry';
 import type {
@@ -34,7 +35,10 @@ export type LockerOptions = {
   keyPrefix?: string;
   /** Receives one object per lock event. What it throws or rejects is dropped. */
   onEvent?: LockEventHandler;
-  /** A monotonic clock in milliseconds. Default `performance.now`. Tests replace it. */
+  /**
+   * A monotonic clock in milliseconds. Default: `performance.now`, plus any time the machine spent
+   * paused that only the wall clock saw. Tests replace it.
+   */
   now?: () => number;
   /** Token generator. Default 16 random bytes as hex. Tests replace it. */
   token?: () => string;
@@ -66,9 +70,6 @@ type Attempt = { lock: Lock } | { lock: null; reason: ContendedReason };
 
 const defaultToken = (): string => randomBytes(16).toString('hex');
 
-// A wall clock can step backwards, which would push the local expiry estimate past the backend's.
-const defaultNow = (): number => performance.now();
-
 export class Locker {
   readonly #adapter: LockAdapter;
   readonly #retry: RetryOptions | undefined;
@@ -99,7 +100,7 @@ export class Locker {
     this.#retry = options.retry;
     this.#keyPrefix = options.keyPrefix ?? '';
     this.#onEvent = options.onEvent;
-    this.#now = options.now ?? defaultNow;
+    this.#now = options.now ?? createSystemClock();
     this.#token = options.token ?? defaultToken;
   }
 
@@ -182,16 +183,26 @@ export class Locker {
     if (lock.state === 'released') {
       return result;
     }
-    const released = await lock.release();
-    if (!released) {
-      throw new LockLostError({ key: lock.key, reason: 'release', completed: true, result });
+    // The work finished under a held lock, so a release that throws does not take its value away:
+    // the error goes to a `releaseFailed` event and the lease runs out on its own. Throwing here
+    // would invite a caller to run finished work a second time.
+    const released = await this.#releaseQuietly(lock);
+    if (released === false) {
+      throw new LockLostError({
+        key: lock.key,
+        reason: 'release',
+        completed: true,
+        result,
+        cause: lock.signal.reason,
+      });
     }
     return result;
   }
 
   /**
-   * Acquires every key, one by one in sorted order, under one timeout. Rolls every acquired lock
-   * back when one key fails. Refreshes every lease before it returns, so the leases overlap.
+   * Acquires every key, one by one in sorted order, under one timeout. Each key gets the whole
+   * `retries` budget of its own. Rolls every acquired lock back when one key fails. Refreshes every
+   * lease before it returns, so the leases overlap.
    */
   async acquireMany(keys: string[], options: AcquireOptions): Promise<LockSet> {
     assertKeys(keys);
@@ -313,18 +324,23 @@ export class Locker {
     const { key, ttl } = prepared;
     const token = this.#token();
     const requestedAt = this.#now();
-    const acquired = await this.#adapter.acquire({ key, token, ttl });
+    let acquired: boolean;
+    try {
+      acquired = await this.#adapter.acquire({ key, token, ttl });
+    } catch (error) {
+      this.#giveBack(key, token);
+      throw error;
+    }
     if (!acquired) {
       return { lock: null, reason: 'held' };
     }
-    const elapsedMs = this.#elapsed(requestedAt);
-    if (elapsedMs >= ttl) {
+    if (this.#now() - requestedAt >= leaseValidity(ttl)) {
       // The answer came after the lease could have ended, so the lock is not usable.
       // Give the key back so the next caller does not wait for the expiry.
       try {
         await this.#adapter.release({ key, token });
       } catch (error) {
-        this.#emit({ type: 'releaseFailed', key, ttl, heldMs: elapsedMs, error });
+        this.#emit({ type: 'releaseFailed', key, ttl, heldMs: this.#elapsed(requestedAt), error });
       }
       return { lock: null, reason: 'late' };
     }
@@ -394,10 +410,27 @@ export class Locker {
     });
   }
 
-  async #releaseQuietly(lock: Lock): Promise<void> {
+  /**
+   * An acquire that threw may still have set the key before its answer was lost. The token is
+   * ours alone, so a release with it removes that key and nothing else. It is not awaited: with the
+   * backend down it would fail too, and only after delaying the error the caller is waiting for.
+   */
+  #giveBack(key: string, token: string): void {
+    Promise.resolve()
+      .then(() => this.#adapter.release({ key, token }))
+      .catch(() => undefined);
+  }
+
+  /**
+   * Releases a lock that nobody will release again. Answers undefined when the release threw: the
+   * error goes to a `releaseFailed` event and the heartbeat stops, so the lease runs out on its
+   * own instead of being renewed until the hold deadline.
+   */
+  async #releaseQuietly(lock: Lock): Promise<boolean | undefined> {
     try {
-      await lock.release();
+      return await lock.release();
     } catch (error) {
+      abandonLock(lock);
       this.#emit({
         type: 'releaseFailed',
         key: lock.key,
@@ -405,6 +438,7 @@ export class Locker {
         heldMs: lock.heldMs,
         error,
       });
+      return undefined;
     }
   }
 
