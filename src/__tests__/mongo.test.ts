@@ -6,6 +6,7 @@ import { mongoClient, uniqueKey } from './backends';
 function fakeCollection(overrides: Partial<MongoLikeCollection> = {}): MongoLikeCollection {
   return {
     createIndex: vi.fn(async () => 'ok'),
+    indexes: vi.fn(async () => [{ key: { _id: 1 } }, { key: { key: 1 }, unique: true }]),
     findOneAndUpdate: vi.fn(async () => ({ value: null })),
     updateOne: vi.fn(async () => ({ matchedCount: 0 })),
     deleteOne: vi.fn(async () => ({ deletedCount: 0 })),
@@ -43,11 +44,67 @@ describe('MongoAdapter', () => {
     expect(() => new MongoAdapter(null as never)).toThrow(/must be an object with a client/);
   });
 
-  it('skips index creation when told to', async () => {
+  it('skips index creation when told to, and checks the unique index once instead', async () => {
     const collection = fakeCollection();
     const adapter = new MongoAdapter({ client: clientFor(collection), createIndexes: false });
     await adapter.isHeld({ key: 'k', token: 't' });
+    await adapter.isHeld({ key: 'k', token: 't' });
     expect(collection.createIndex).not.toHaveBeenCalled();
+    expect(collection.indexes).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to work without a unique index on key alone', async () => {
+    // Without it two upserts of a missing key can both insert a document, and both callers win.
+    const missing = [
+      [{ key: { _id: 1 } }],
+      [{ key: { key: 1 } }],
+      [{ key: { key: 1, uniqueValue: 1 }, unique: true }],
+      [{ key: { key: 1 }, unique: true, partialFilterExpression: { expireAt: { $exists: true } } }],
+    ];
+    for (const indexes of missing) {
+      const collection = fakeCollection({ indexes: vi.fn(async () => indexes) });
+      const adapter = new MongoAdapter({ client: clientFor(collection), createIndexes: false });
+      await expect(adapter.acquire({ key: 'k', token: 't', ttl: 1000 })).rejects.toThrow(
+        /no unique index on key/,
+      );
+      expect(collection.findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  });
+
+  it('treats a collection that does not exist as one without the index', async () => {
+    const notFound = Object.assign(new Error('ns does not exist'), { code: 26 });
+    const collection = fakeCollection({ indexes: vi.fn().mockRejectedValue(notFound) });
+    const adapter = new MongoAdapter({ client: clientFor(collection), createIndexes: false });
+    await expect(adapter.isHeld({ key: 'k', token: 't' })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('checks the index again after the check itself failed', async () => {
+    const indexes = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('not primary'))
+      .mockResolvedValue([{ key: { key: 1 }, unique: true }]);
+    const collection = fakeCollection({ indexes });
+    const adapter = new MongoAdapter({ client: clientFor(collection), createIndexes: false });
+    await expect(adapter.isHeld({ key: 'k', token: 't' })).rejects.toThrow('not primary');
+    await expect(adapter.isHeld({ key: 'k', token: 't' })).resolves.toBe(false);
+  });
+
+  it('reads from the primary and writes with a majority by default', () => {
+    const collection = vi.fn(() => fakeCollection());
+    const client: MongoLikeClient = { db: () => ({ collection }) };
+    new MongoAdapter({ client });
+    expect(collection).toHaveBeenCalledWith('locco-locks', {
+      readPreference: 'primary',
+      writeConcern: { w: 'majority' },
+    });
+    new MongoAdapter({ client, collectionName: 'x', writeConcern: { w: 1, journal: true } });
+    expect(collection).toHaveBeenLastCalledWith('x', {
+      readPreference: 'primary',
+      writeConcern: { w: 1, journal: true },
+    });
+    expect(() => new MongoAdapter({ client, writeConcern: 'majority' as never })).toThrow(
+      ValidationError,
+    );
   });
 
   it('tries the index creation again after a failure', async () => {
