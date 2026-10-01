@@ -1,4 +1,4 @@
-[![Build and Test](https://github.com/kontsedal/locco/workflows/Build%20and%20Test/badge.svg)](https://github.com/kontsedal/locco/actions/workflows/status.yml?query=branch%3Amain)
+[![Build and Test](https://github.com/Kontsedal/locco/actions/workflows/status.yml/badge.svg?branch=main)](https://github.com/Kontsedal/locco/actions/workflows/status.yml?query=branch%3Amain)
 [![npm](https://img.shields.io/npm/v/@kontsedal/locco)](https://www.npmjs.com/package/@kontsedal/locco)
 
 # locco
@@ -15,11 +15,13 @@ is lost, instead of letting the work run on unprotected.
 
 - **Three ways to hold a lock.** `acquire` for manual control, `withLock` for a scoped callback,
   `acquireMany` for a set of keys.
-- **`await using`.** A `Lock` is an `AsyncDisposable`, so the runtime releases it at block exit.
+- **`await using`.** A `Lock` is an `AsyncDisposable`, so it is released at block exit. Node.js
+  runs `await using` natively from 24; on 22, compile it with TypeScript 5.2+ or Babel.
 - **Retries with a budget.** A count, a delay or a delay function, and a timeout on the whole
   acquisition. The options merge per field with the locker default.
-- **Auto-extension with a hard deadline.** A heartbeat extends the lease, and `maxHold` caps how
-  long the lock can live, so a forgotten lock still expires.
+- **Auto-extension with a hard deadline.** A heartbeat extends the lease and retries a failed
+  extension while the lease lasts. `maxHold` caps how long the lock can live, so a forgotten lock
+  still expires.
 - **A loss signal.** `lock.signal` is an `AbortSignal` that aborts when the lease is lost.
   `withLock` throws `LockLostError` when the work finished without a lock.
 - **Errors with codes.** Contention is one error, `LockHeldError`. A driver error passes through
@@ -105,6 +107,14 @@ event. An extension that finds the key not ours marks the lock `lost` and aborts
 lease that runs out with no extension does the same, on the holder's own clock. `withLock` throws
 `LockLostError` when the callback finished but the lock was lost.
 
+**How the holder's clock is read.** The local lease starts when the acquire or extend request
+leaves, never later than the backend's, and ends 1% of the TTL early, the margin Redlock uses for
+a holder clock that runs slower than the backend's. The clock is `performance.now`, which cannot
+step backwards, plus any pause that only the wall clock saw: a sleeping laptop or a paused VM
+stops the monotonic clock while the backend's keeps running. Reading `state`, `signal`,
+`lostReason` or `heldMs` checks the clock, so a lock whose expiry timer has not run yet, after a
+pause or on a busy event loop, still reads `lost`.
+
 **What no lease lock survives.** Read this before you protect a money-moving write with a lock.
 
 - **A pause after the signal fires.** A process that stops for garbage collection or a page fault
@@ -112,11 +122,15 @@ lease that runs out with no extension does the same, on the holder's own clock. 
   write is unacceptable, the write itself needs a condition, such as a version check.
 - **A clock that is not the backend's.** Redis expires the key on its own clock. MongoDB and
   Postgres compare on the server clock, through `$$NOW` and `clock_timestamp()`. The local expiry
-  estimate counts elapsed time on the holder's machine and needs no shared clock.
+  estimate counts elapsed time on the holder's machine and needs no shared clock. A holder clock
+  that runs more than 1% slower than the backend's breaks that estimate.
 - **Redis eviction.** Under memory pressure Redis can evict a lock key. Run the lock Redis with
   `maxmemory-policy noeviction`.
-- **Redis failover.** A single Redis that fails over to a replica can forget an acknowledged
-  lock. locco locks one Redis and is not a Redlock quorum.
+- **Failover.** A backend that fails over can lose a write it had acknowledged, and another caller
+  can then acquire the same key. A single Redis can forget a lock that only its old primary had;
+  locco locks one Redis and is not a Redlock quorum. MongoDB writes with `w: 'majority'` by
+  default, which survives a replica set election. Postgres is safe across a failover only with
+  synchronous replication to the standby that takes over.
 - **A slow answer.** An acquire or extend answer that arrives after the lease has run out is
   treated as a failure, not as a lock.
 
@@ -133,7 +147,7 @@ caller. Pass the held `Lock` to the code that needs it.
 | `retry` | `RetryOptions` | `{ retries: 10, delay: 200 }` | Default retry policy. Each call can override a field. |
 | `keyPrefix` | `string` | `''` | Prepended to every key. Use it to keep test workers apart. |
 | `onEvent` | `(event: LockEvent) => void` | none | Receives every event. What it throws is dropped. |
-| `now` | `() => number` | `performance.now` | A monotonic clock in milliseconds. A wall clock can step backwards and delay the local expiry. Tests replace it. |
+| `now` | `() => number` | `performance.now` plus pauses | A monotonic clock in milliseconds. See [how the holder's clock is read](#guarantees-and-limits). Tests replace it. |
 | `token` | `() => string` | 16 random bytes as hex | The value stored under the key. Tests replace it. |
 
 ### `locker.acquire(key, options)`
@@ -165,17 +179,21 @@ included. The outcome follows one order:
 1. `fn` threw. That error is thrown. A release error after it goes to a `releaseFailed` event.
 2. `fn` returned and the lock is lost, or a release found the key not ours. `LockLostError` is
    thrown with `completed: true` and the return value in `result`.
-3. `fn` returned and the release threw. The driver error is thrown. The return value is lost, so
-   do not rely on `withLock` to report work that a release failure can hide.
-4. The return value of `fn` is returned. A callback that released the lock itself counts here, as
-   long as the key was still ours.
+3. The return value of `fn` is returned. A callback that released the lock itself counts here, as
+   long as the key was still ours. So does a release that threw: the work finished under a held
+   lock, so the error goes to a `releaseFailed` event instead of hiding the value, and the key
+   stays until its lease runs out.
+
+Whenever `withLock` cannot release the lock, the heartbeat stops, so the key is not renewed until
+`maxHold` for a caller that has already moved on.
 
 ### `locker.acquireMany(keys, options)`
 
 Deduplicates and sorts the keys, then acquires them one by one, so two callers with overlapping
-sets cannot deadlock. `retry.timeout` is one budget for the whole set. Every lease is refreshed
-before the set is returned, so the leases overlap. When one key fails, every acquired lock is
-released and the error is thrown.
+sets cannot deadlock. `retry.timeout` is one budget for the whole set, while `retry.retries` is
+spent on each key separately. Every lease is refreshed before the set is returned, so the leases
+overlap. When one key fails, every acquired lock is released and the error is thrown. With
+`autoExtend`, each lock counts `maxHold` from its own acquisition.
 
 Returns a `LockSet` with `locks`, `signal`, `release()`, `extend(ttl)` and `Symbol.asyncDispose`.
 
@@ -204,24 +222,40 @@ of them.
 
 ### Auto-extension
 
-`autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and the
-interval must be smaller than the TTL. The timer does not keep the process alive.
+`autoExtend` runs `extend(ttl)` on a timer. The default interval is a third of the TTL, and an
+explicit interval can be at most half of it. Each tick runs one interval after the request for
+the current lease left, not after its answer came back, so a slow backend uses up the slack of one
+lease instead of adding up across leases. Whatever the interval leaves of the TTL is the time an
+extension has to come back. The timer does not keep the process alive.
 
 `maxHold` is **required** wherever `autoExtend` is, on `acquire`, `tryAcquire` and `withLock`
 alike. It is a deadline on ownership, counted from acquisition. Every extension, manual or from
-the heartbeat, is clamped so the local lease ends at the deadline, and at the deadline
-`lock.signal` aborts with a `LOCK_MAX_HOLD` reason. The backend counts its TTL from the moment it
-handles the request, so the backend lease can outlive the deadline by the time the last extension
-spent in flight, in queues and in the backend.
+the heartbeat, is clamped so the local lease ends no later than the deadline, and at the deadline
+the lock is lost with `reason: 'max-hold'`. The backend counts its TTL from the moment it handles
+the request, so the backend lease can outlive the deadline by the time the last extension spent in
+flight, in queues and in the backend.
 
 There is no way to ask for a heartbeat without a deadline. A caller that never returns, or a
 `withLock` callback that never settles, would otherwise renew the lease until the process died,
 which is the failure a lease exists to survive. Pick a `maxHold` above the longest run you expect.
 
-When an extension fails, throws, or answers after the new lease has run out, the heartbeat stops,
-the lock becomes `lost`, and `lock.signal` aborts with a `LockLostError`. A refusal and a failure
-are told apart: `extend` means the backend said the key was not ours, `extend-failed` means the
-request never got an answer and the lease state is unknown, with the driver error in `cause`.
+An extension that throws does not end the lock. The lease confirmed before it still runs, so the
+lock stays `held`, an `extendFailed` event reports the error, and the heartbeat tries again after
+a third of its interval. The lock is lost only when the backend refuses the key, or when the lease
+runs out first. The reasons tell these apart:
+
+| `reason` | Meaning |
+|---|---|
+| `extend` | The backend answered that the key was not ours. |
+| `extend-failed` | The lease ran out while extension requests kept throwing. The last driver error is the `cause`. |
+| `late-extend` | The lease ran out while an extension was still waiting for its answer. The backend is too slow for the TTL. |
+| `expired` | The lease ran out and nothing extended it. |
+| `max-hold` | The hold deadline passed. |
+| `release` | A release found the key gone or another holder's. |
+| `observed` | `isHeld()` found the key gone or another holder's. |
+
+When `await using` or `withLock` cannot release a lock, its heartbeat stops for good: nobody is
+left to release it again, and renewing it until `maxHold` would only keep the key from everyone.
 
 ### `Lock`
 
@@ -231,9 +265,9 @@ request never got an answer and the lease state is unknown, with the driver erro
 | `state` | `'held'`, `'lost'` or `'released'`. Loss is sticky until `release()`. |
 | `lostReason` | Why the lock was lost, or `undefined` when it was never lost. |
 | `heldMs` | How long the lock was held. Stops counting once it is lost or released. |
-| `signal` | Aborts on every known loss: a failed or late extension, a local lease expiry, the hold deadline, a release or a check that finds the key not ours. Pass it to the work. |
+| `signal` | Aborts on every known loss, with a `LockLostError` as its reason: a refused or late extension, a local lease expiry, the hold deadline, a release or a check that finds the key not ours. Pass it to the work. |
 | `release()` | `true` when it deleted our key, `false` when the key was gone or not ours. Throws only when the driver throws; the lock then keeps its state and a later call tries again. After a successful call, a second call returns `false`. |
-| `extend(ttl)` | New lease from now, clamped to the hold deadline. Throws `LockLostError` when the key was not ours, and the `LOCK_MAX_HOLD` error when the deadline has passed. |
+| `extend(ttl)` | New lease from now, clamped to the hold deadline. Throws `LockLostError` when the key was not ours or the deadline has passed. A driver error is thrown as it is and leaves the lock held until its current lease runs out. |
 | `isHeld()` | One observation of the backend. A `false` while the lock is held marks it lost. |
 | `[Symbol.asyncDispose]()` | Calls `release()`. |
 
@@ -245,10 +279,9 @@ error is not wrapped. It reaches you as the driver threw it.
 | Class | `code` | When |
 |---|---|---|
 | `LockHeldError` | `LOCK_HELD` | The key could not be taken and the budget is spent. Carries `key`, `attempts`, `elapsedMs`, `reason`. |
-| `LockLostError` | `LOCK_LOST` | The lease was lost. Carries `key`, `reason`, and from `withLock` also `completed` and `result`. |
+| `LockLostError` | `LOCK_LOST` | The lease was lost, the hold deadline included. Carries `key`, `reason`, `cause`, and from `withLock` also `completed` and `result`. |
 | `LockStateError` | `LOCK_STATE` | `extend` on a lock that is released, or one whose release is in flight. |
-| `LoccoError` | `LOCK_MAX_HOLD` | The abort reason on `lock.signal` at the hold deadline. |
-| `ValidationError` | `LOCK_VALIDATION` | A wrong argument. |
+| `ValidationError` | `LOCK_VALIDATION` | A wrong argument or a backend set up wrong, such as a MongoDB collection without its unique index. |
 
 A project that loads the package as CommonJS in one place and as ESM in another gets two copies of
 these classes, and `instanceof` fails across them. Check `error.code` there.
@@ -274,6 +307,7 @@ try {
 | `acquired` | `waitedMs`, `attempts` | A lock was taken. |
 | `contended` | `attempt`, `elapsedMs`, `reason` | An attempt yielded no lock. |
 | `extended` | `heldMs` | A lease was extended. |
+| `extendFailed` | `heldMs`, `error` | An extension threw. The lock is still held, and the heartbeat tries again. |
 | `released` | `heldMs` | Our key was deleted. |
 | `lost` | `heldMs`, `reason` | The lease was lost. |
 | `releaseFailed` | `heldMs`, `error` | A release threw. |
@@ -333,10 +367,23 @@ const adapter = new MongoAdapter({ client, dbName: 'app', collectionName: 'locco
 | `dbName` | the client's default | Passed to `client.db()`. |
 | `collectionName` | `'locco-locks'` | Where the documents live. |
 | `createIndexes` | `true` | Create the unique index on `key` and the TTL index on `expireAt` on first use. |
+| `writeConcern` | `{ w: 'majority' }` | The write concern of every lock write. |
 
 One document per key: `key`, `uniqueValue`, `expireAt`. Expiry is compared on the server clock
 through `$$NOW`. Acquire is a pipeline upsert on `key`, so it is atomic without a transaction. The
 TTL index removes expired documents in the background. Needs MongoDB 4.2 or newer.
+
+The unique index on `key` is what makes acquire exclusive: without it, two upserts of a missing
+key can both insert a document, and both callers win. With `createIndexes: false`, create the
+indexes in a migration from `mongoLocksIndexes()`, which returns them in the shape
+`collection.createIndexes()` takes. The adapter checks once that the unique index exists and
+refuses to work without it.
+
+Every write uses `w: 'majority'` unless `writeConcern` says otherwise, so a replica set election
+cannot roll back a lock that was granted. A write acknowledged by the primary alone can be lost in
+a failover, and another caller can then acquire the same key. Every read goes to the primary,
+whatever the client's read preference: a lagging secondary could answer that a lock we were just
+granted is not ours.
 
 ### Postgres
 
@@ -361,6 +408,10 @@ DO UPDATE ... WHERE expires_at <= clock_timestamp()`. When another transaction h
 statement waits for it, and the retry timeout cannot cut that wait. Set `lock_timeout` on the
 connection to bound it.
 
+A standby that takes over after a failover has every lock row only with synchronous replication.
+With asynchronous replication, a lock granted just before the failover can be missing on the new
+primary.
+
 Postgres has no TTL index. An expired row stays until the next acquire of the same key overwrites
 it. Call `sweepExpired()` on a schedule to remove them:
 
@@ -381,8 +432,9 @@ import { InMemoryAdapter } from '@kontsedal/locco/memory';
 const adapter = new InMemoryAdapter();
 ```
 
-One process only. `clear()` forgets every lock. `now` in the options replaces the clock, so tests
-can use fake timers.
+One process only. `clear()` forgets every lock. The clock is `performance.now`, so a wall-clock
+step cannot end every lease at once. `now` in the options replaces it: pass `() => Date.now()` to
+follow fake timers.
 
 ## Write your own adapter
 
@@ -400,7 +452,7 @@ export class MyAdapter implements LockAdapter {
 }
 ```
 
-Run the same contract suite the built-in adapters pass, in a vitest file:
+Run the same contract suite the built-in adapters pass, in a vitest file (vitest 1 or newer):
 
 ```ts
 import { runLockAdapterContract } from '@kontsedal/locco/testing';
@@ -412,18 +464,22 @@ runLockAdapterContract('MyAdapter', () => ({ adapter: new MyAdapter() }));
 
 See [docs/migrating-to-v2.md](docs/migrating-to-v2.md). The Redis keys and the MongoDB documents
 are unchanged, so 1.x and 2.x processes can share one backend during a rolling deploy. A codemod
-ships with the package. After you install 2.0, run it from your project:
+ships with the package. After you install 2.0, run it from your project. Quote the glob: the
+codemod expands it itself, at every depth, on every shell.
 
 ```shell
-npx locco-migrate-v2 --write src/**/*.ts
+npx locco-migrate-v2 --write "src/**/*.ts"
 ```
 
 ## Requirements
 
-- Node.js 22 or newer.
-- TypeScript 5.2 or newer for `await using`. CommonJS has no top-level `await`, so write it inside
-  an async function.
-- One of: `ioredis` 5+, `redis` 4+, `mongodb` 5.7+, `pg` 8+.
+- Node.js 22 or newer. `await using` runs natively from Node.js 24; on 22 it needs a compiler that
+  lowers it, such as TypeScript 5.2+ with a `target` below `ESNext`. CommonJS has no top-level
+  `await`, so write it inside an async function.
+- TypeScript 5.2 or newer, if you use TypeScript. The declarations are checked on 5.2 and on the
+  latest release.
+- One of: `ioredis` 5 or 6, `redis` 4 to 6, `mongodb` 5.7 to 7, `pg` 8.0.3 or newer 8.x. CI runs
+  the suite on the oldest and the newest of each.
 
 ## License
 

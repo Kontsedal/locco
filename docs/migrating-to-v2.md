@@ -21,7 +21,7 @@ during a rolling deploy.
 | `lock.uniqueValue` | `lock.token` |
 | `lock.isLocked()` | `lock.isHeld()` |
 | `ILockAdapter` with methods that throw | `LockAdapter` with methods that return booleans |
-| `new MongoAdapter({ locksCollectionName })` | `new MongoAdapter({ collectionName })`. The old name throws a `TypeError`, so a spread config cannot send the locks to the default collection by mistake. |
+| `new MongoAdapter({ locksCollectionName })` | `new MongoAdapter({ collectionName })`. The old name throws a `ValidationError`, so a spread config cannot send the locks to the default collection by mistake. |
 | `import { IoRedisAdapter } from '@kontsedal/locco'` | `import { IoRedisAdapter } from '@kontsedal/locco/redis'` |
 
 ### Why `retries` is one less than `retryTimes`
@@ -39,6 +39,8 @@ retried without a limit. Pass `retries: Infinity` to keep that.
 
 ## Behaviour that changed
 
+- **Node.js 22 or newer.** 1.x ran on Node.js 18. `await using` is native from Node.js 24; on 22,
+  compile it with TypeScript 5.2+ or Babel.
 - **`release()` throws driver errors.** 1.x swallowed every error in `release()`. 2.0 returns
   `false` when the key was not ours and throws only when the driver throws. A `finally` block that
   calls `release()` can now throw a driver error. The lock keeps its state after such a throw, so
@@ -53,7 +55,11 @@ retried without a limit. Pass `retries: Infinity` to keep that.
   client's `new Date()`. 2.0 uses `$$NOW` on the server. The document shape is unchanged. Two
   processes on 1.x and 2.0 therefore read one document with two clocks until the deploy finishes.
 - **The MongoDB adapter creates two indexes, not three.** The compound index on
-  `key, expireAt, uniqueValue` is no longer created. An existing one is left in place.
+  `key, expireAt, uniqueValue` is no longer created. An existing one is left in place. With
+  `createIndexes: false`, the adapter checks that the unique index on `key` exists and refuses to
+  work without it. 1.x created it too, so a collection 1.x has used already has it.
+- **The MongoDB adapter writes with `w: 'majority'` and reads from the primary.** 1.x used the
+  client's settings. Pass `writeConcern` to choose another.
 - **The Redis adapter registers no commands.** 1.x called `defineCommand` for `releaseLock` and
   `extendLock` on the client. 2.0 sends the scripts with `EVALSHA` and falls back to `EVAL`.
 - **Validation errors are rejections.** Every acquire method is async, so a bad argument rejects
@@ -87,18 +93,22 @@ comment or a regular expression is not touched. It changes only numeric literals
 holds another one inside its key or ttl is reported rather than rewritten, because rewriting the
 outer call would carry the inner one across untouched.
 
-It needs the classic TypeScript syntax API, which TypeScript 7 does not expose. On a project that
-has moved to 7, run it once under 5:
+After you install 2.0, run it from your project. It takes files, directories and globs, and
+expands globs itself at every depth and skipping `node_modules`, so quote them: an unquoted
+`src/**/*.ts` reaches it one directory deep from bash and not expanded at all from PowerShell. A
+pattern that matches no file stops it before it changes anything.
 
 ```shell
-npx --package typescript@5 -- locco-migrate-v2 --write src/**/*.ts
+npx locco-migrate-v2 "src/**/*.ts"            # report only
+npx locco-migrate-v2 --write "src/**/*.ts"    # rewrite the files
 ```
 
-After you install 2.0, run it from your project:
+It needs the classic TypeScript syntax API, which TypeScript 7 does not expose. It uses the first
+TypeScript 5 or 6 it finds: the one `--typescript <path>` names, the project's own, then one that
+`npx --package` installed. On a project that has moved to 7, run it once with 5 beside it:
 
 ```shell
-npx locco-migrate-v2 src/**/*.ts            # report only
-npx locco-migrate-v2 --write src/**/*.ts    # rewrite the files
+npx --package typescript@5 -- locco-migrate-v2 --write "src/**/*.ts"
 ```
 
 Read the report and finish the listed sites by hand. Then run your test suite against a 2.0
@@ -108,5 +118,6 @@ install before you deploy.
 
 A `Lock` implements `Symbol.asyncDispose`, so `await using lock = await locker.acquire(...)`
 releases it at block exit. When the work throws and the release throws too, the runtime raises a
-`SuppressedError` that carries both errors. This needs TypeScript 5.2 or newer. It is a follow-up
-after the mechanical migration, one critical section at a time.
+`SuppressedError` that carries both errors. When the release throws, the lock's heartbeat stops and
+its lease runs out on its own. This needs Node.js 24, or TypeScript 5.2 or newer to compile it for
+22. It is a follow-up after the mechanical migration, one critical section at a time.
