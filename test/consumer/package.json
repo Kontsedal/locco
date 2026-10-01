@@ -1,0 +1,5 @@
+{
+  "name": "locco-consumer-check",
+  "private": true,
+  "type": "module"
+}

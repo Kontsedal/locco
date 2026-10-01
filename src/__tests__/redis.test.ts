@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { IoRedisAdapter } from '../adapters/ioRedis';
 import { NodeRedisAdapter } from '../adapters/nodeRedis';
 import { isNoScriptError } from '../adapters/redisScripts';
-import { ioRedisClient, uniqueKey } from './backends';
+import { closeNodeRedis, ioRedisClient, uniqueKey } from './backends';
 import { TEST_CONFIG } from './config';
 
 describe('Redis adapters', () => {
@@ -83,7 +83,7 @@ describe('Redis adapters', () => {
     });
 
     afterAll(async () => {
-      await nodeClient.close();
+      await closeNodeRedis(nodeClient);
     });
 
     it('falls back to eval after the script cache is flushed', async () => {

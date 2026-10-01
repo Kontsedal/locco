@@ -34,10 +34,18 @@ export function ioRedisBackend(): Backend {
   return { adapter: new IoRedisAdapter({ client }), close: () => client.quit() };
 }
 
+/** Closes a `redis` client of any supported major: 5 added `close()`, 4 only has `quit()`. */
+export function closeNodeRedis(client: {
+  close?: () => Promise<unknown>;
+  quit: () => Promise<unknown>;
+}) {
+  return typeof client.close === 'function' ? client.close() : client.quit();
+}
+
 export async function nodeRedisBackend(): Promise<Backend> {
   const client = createClient({ url: `redis://localhost:${TEST_CONFIG.REDIS_PORT}` });
   await client.connect();
-  return { adapter: new NodeRedisAdapter({ client }), close: () => client.close() };
+  return { adapter: new NodeRedisAdapter({ client }), close: () => closeNodeRedis(client) };
 }
 
 export async function mongoClient(): Promise<MongoClient> {

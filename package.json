@@ -127,6 +127,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "prepack": "npm run build",
     "type:check": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -135,14 +136,15 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "check:package": "npm run build && attw --pack .",
+    "check:consumer": "node scripts/check-consumer.mjs",
     "compose": "docker compose up -d"
   },
   "peerDependencies": {
-    "ioredis": ">=5",
-    "mongodb": ">=5.7",
-    "pg": ">=8",
-    "redis": ">=4",
-    "vitest": ">=1"
+    "ioredis": "^5.0.0 || ^6.0.0",
+    "mongodb": "^5.7.0 || ^6.0.0 || ^7.0.0",
+    "pg": "^8.0.3",
+    "redis": "^4.0.0 || ^5.0.0 || ^6.0.0",
+    "vitest": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {
     "ioredis": {
@@ -168,7 +170,8 @@
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^5.0.1",
     "ioredis": "6.0.0",
-    "locco-v1": "npm:@kontsedal/locco@1.0.0",
+    "locco-v1-0": "npm:@kontsedal/locco@1.0.0",
+    "locco-v1-1": "npm:@kontsedal/locco@1.1.0",
     "mongodb": "7.6.0",
     "pg": "^8.23.0",
     "publint": "^0.3.24",
@@ -179,8 +182,5 @@
   },
   "bin": {
     "locco-migrate-v2": "./scripts/codemod-v1-to-v2.mjs"
-  },
-  "overrides": {
-    "esbuild": "^0.28.2"
   }
 }
