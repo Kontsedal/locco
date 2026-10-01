@@ -6,8 +6,10 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
-Version 2.0. Neither 2.0 beta was published, so this entry lists everything that changed since
-1.1.0. [The migration guide](docs/migrating-to-v2.md) has the full table and the codemod.
+## [2.0.0] - 2026-10-01
+
+Neither 2.0 beta was published, so this entry lists everything that changed since 1.1.0.
+[The migration guide](docs/migrating-to-v2.md) has the full table and the codemod.
 
 ### Changed
 
@@ -107,6 +109,7 @@ Version 2.0. Neither 2.0 beta was published, so this entry lists everything that
 
 First stable release with the Redis, MongoDB and in-memory adapters.
 
-[Unreleased]: https://github.com/Kontsedal/locco/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Kontsedal/locco/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Kontsedal/locco/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/Kontsedal/locco/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Kontsedal/locco/releases/tag/v1.0.0
