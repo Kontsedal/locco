@@ -1,22 +1,19 @@
 #!/usr/bin/env node
 // Rewrites the one literal 1.x call shape to 2.0 and reports every site it did not touch.
-//   npx locco-migrate-v2 [--write] <file>...
-// It parses each file with the TypeScript package of your project, so text inside a string, a
-// comment or a regular expression is never touched.
-import { readFileSync, writeFileSync } from 'node:fs';
+//   npx locco-migrate-v2 [--write] [--typescript <path>] <file, directory or glob>...
+// It parses each file with a TypeScript package, so text inside a string, a comment or a regular
+// expression is never touched.
+import { globSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-const args = process.argv.slice(2);
-const write = args.includes('--write');
-const files = args.filter((arg) => arg !== '--write');
+const USAGE =
+  'usage: locco-migrate-v2 [--write] [--typescript <path>] <file, directory or glob>...';
+const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 
-if (files.length === 0 || args.includes('--help') || args.includes('-h')) {
-  console.error('usage: locco-migrate-v2 [--write] <file>...');
-  process.exit(2);
-}
-
-const ts = loadTypeScript();
+const { write, typescript, patterns } = parseArgs(process.argv.slice(2));
+const files = expand(patterns);
+const ts = loadTypeScript(typescript);
 
 const MANUAL_PATTERNS = [
   ['retryDelayFn', 'retryDelayFn: the context fields changed and stop() is gone'],
@@ -61,26 +58,133 @@ if (!write && rewritten > 0) {
   console.log('Run again with --write to change the files.');
 }
 
-function loadTypeScript() {
-  let loaded;
+function parseArgs(args) {
+  const parsed = { write: false, typescript: undefined, patterns: [] };
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--help' || arg === '-h') {
+      fail(USAGE);
+    } else if (arg === '--write') {
+      parsed.write = true;
+    } else if (arg === '--typescript') {
+      index += 1;
+      parsed.typescript = args[index];
+      if (parsed.typescript === undefined) {
+        fail('--typescript needs the path of a TypeScript package.');
+      }
+    } else if (arg.startsWith('--typescript=')) {
+      parsed.typescript = arg.slice('--typescript='.length);
+    } else {
+      parsed.patterns.push(arg);
+    }
+  }
+  if (parsed.patterns.length === 0) {
+    fail(USAGE);
+  }
+  return parsed;
+}
+
+/**
+ * Expands every glob and directory itself. Bash expands a `**` glob one directory level deep
+ * unless globstar is on, and PowerShell and cmd do not expand globs at all.
+ */
+function expand(args) {
+  const found = new Set();
+  const unmatched = [];
+  for (const arg of args) {
+    const matches = matchesOf(arg);
+    if (matches.length === 0) {
+      unmatched.push(arg);
+    }
+    for (const match of matches) {
+      found.add(match);
+    }
+  }
+  if (unmatched.length > 0) {
+    fail(`No file matches ${unmatched.map((arg) => `"${arg}"`).join(', ')}. Nothing was changed.`);
+  }
+  return [...found].sort();
+}
+
+function matchesOf(arg) {
+  if (/[*?[\]{}]/.test(arg)) {
+    return globFiles(arg);
+  }
+  let stats;
   try {
-    loaded = createRequire(path.join(process.cwd(), 'package.json'))('typescript');
+    stats = statSync(arg);
   } catch {
-    console.error('locco-migrate-v2 needs the "typescript" package in your project.');
-    process.exit(2);
+    return [];
   }
-  // TypeScript 7 ships the native compiler and does not expose the classic syntax API yet, so
-  // every call below would be undefined. Say so instead of dying on a TypeError deep in a walk.
-  if (typeof loaded.createSourceFile !== 'function' || !loaded.ScriptTarget) {
-    console.error(
-      `locco-migrate-v2 needs the classic TypeScript syntax API, which typescript@${loaded.version ?? '?'} in this project does not expose.`,
-    );
-    console.error(
-      'Run it once with TypeScript 5, for example: npx --package typescript@5 -- locco-migrate-v2 --write <file>...',
-    );
-    process.exit(2);
+  return stats.isDirectory() ? globFiles(path.join(arg, '**', '*')) : [arg];
+}
+
+function globFiles(pattern) {
+  // Node 22 hands `exclude` a path and later versions can hand it a Dirent, so read either.
+  const skip = (entry) =>
+    (typeof entry === 'string' ? path.basename(entry) : entry.name) === 'node_modules';
+  return globSync(pattern.split(path.sep).join('/'), { exclude: skip }).filter(
+    (file) =>
+      SOURCE_FILE.test(file) &&
+      !file.split(/[\\/]/).includes('node_modules') &&
+      statSync(file).isFile(),
+  );
+}
+
+/**
+ * The first TypeScript that still has the classic syntax API: the one `--typescript` names, the
+ * project's own, then any that `npx --package` put on the PATH. TypeScript 7 ships the native
+ * compiler and does not expose that API, so a project on 7 needs a 5 or a 6 beside it.
+ */
+function loadTypeScript(explicit) {
+  const project = createRequire(path.join(process.cwd(), 'package.json'));
+  const candidates = explicit
+    ? [() => project(path.resolve(explicit))]
+    : [() => project('typescript'), ...onPath().map((root) => () => root('typescript'))];
+  // npm puts the project's own `.bin` on the PATH too, so one copy can turn up more than once.
+  const unusable = new Set();
+  for (const load of candidates) {
+    let loaded;
+    try {
+      loaded = load();
+    } catch {
+      continue;
+    }
+    if (typeof loaded.createSourceFile === 'function' && loaded.ScriptTarget) {
+      return loaded;
+    }
+    unusable.add(`typescript@${loaded.version ?? '?'}`);
   }
-  return loaded;
+  if (explicit && unusable.size === 0) {
+    fail(`--typescript ${explicit} is not a TypeScript package.`);
+  }
+  if (unusable.size === 0) {
+    fail(
+      'locco-migrate-v2 needs the "typescript" package. Install it in the project, or run:',
+      '  npx --package typescript@5 -- locco-migrate-v2 --write "src/**/*.ts"',
+    );
+  }
+  fail(
+    `locco-migrate-v2 needs the classic TypeScript syntax API, which ${[...unusable].join(' and ')} ${unusable.size > 1 ? 'do' : 'does'} not expose.`,
+    'Run it once with TypeScript 5 beside it, for example:',
+    '  npx --package typescript@5 -- locco-migrate-v2 --write "src/**/*.ts"',
+    'or point it at a copy with --typescript <path>.',
+  );
+}
+
+/** A `require` for every `node_modules/.bin` on the PATH, rooted where that `node_modules` lives. */
+function onPath() {
+  return (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .filter((entry) => /node_modules[\\/]\.bin[\\/]?$/.test(entry))
+    .map((entry) => createRequire(path.join(entry, '..', '..', 'package.json')));
+}
+
+function fail(...lines) {
+  for (const line of lines) {
+    console.error(line);
+  }
+  process.exit(2);
 }
 
 function rewrite(file, source) {
