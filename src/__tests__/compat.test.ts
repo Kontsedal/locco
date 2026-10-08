@@ -98,4 +98,15 @@ describe.each(pairs)('%s and 2.0 on one %s', (_version, _backend, make) => {
     const old = await pair.v1.lock(key, 5000).acquire();
     await old.release({ throwOnFail: true });
   });
+
+  it('a fenced 2.0 holder blocks a 1.x acquire: the fence lives outside the lock key', async () => {
+    const fenced = new Locker({ adapter: pair.v2, fencing: true, retry: { retries: 0 } });
+    const key = uniqueKey();
+    const lock = await fenced.acquire(key, { ttl: 5000 });
+    expect(lock.fence).toEqual(expect.any(Number));
+    await expect(pair.v1.lock(key, 5000).acquire()).rejects.toThrow();
+    await expect(lock.release()).resolves.toBe(true);
+    const old = await pair.v1.lock(key, 5000).acquire();
+    await old.release({ throwOnFail: true });
+  });
 });

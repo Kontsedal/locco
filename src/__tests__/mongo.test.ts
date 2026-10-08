@@ -97,11 +97,18 @@ describe('MongoAdapter', () => {
       readPreference: 'primary',
       writeConcern: { w: 'majority' },
     });
-    new MongoAdapter({ client, collectionName: 'x', writeConcern: { w: 1, journal: true } });
-    expect(collection).toHaveBeenLastCalledWith('x', {
+    // The fence counter gets the same guarantees as the locks.
+    expect(collection).toHaveBeenCalledWith('locco-locks-fences', {
       readPreference: 'primary',
-      writeConcern: { w: 1, journal: true },
+      writeConcern: { w: 'majority' },
     });
+    new MongoAdapter({ client, collectionName: 'x', writeConcern: { w: 1, journal: true } });
+    for (const name of ['x', 'x-fences']) {
+      expect(collection).toHaveBeenCalledWith(name, {
+        readPreference: 'primary',
+        writeConcern: { w: 1, journal: true },
+      });
+    }
     expect(() => new MongoAdapter({ client, writeConcern: 'majority' as never })).toThrow(
       ValidationError,
     );
@@ -134,6 +141,71 @@ describe('MongoAdapter', () => {
     const findOneAndUpdate = vi.fn().mockRejectedValue(new Error('network'));
     const adapter = new MongoAdapter({ client: clientFor(fakeCollection({ findOneAndUpdate })) });
     await expect(adapter.acquire({ key: 'k', token: 't', ttl: 1000 })).rejects.toThrow('network');
+  });
+
+  it('takes no fence when the key is held', async () => {
+    const locks = fakeCollection();
+    const fences = fakeCollection();
+    const client: MongoLikeClient = {
+      db: () => ({ collection: (name) => (name.endsWith('-fences') ? fences : locks) }),
+    };
+    const adapter = new MongoAdapter({ client });
+    await expect(adapter.acquireFenced({ key: 'k', token: 't', ttl: 1000 })).resolves.toBeNull();
+    expect(fences.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('retries the fence increment once after a duplicate-key race, and lets other errors through', async () => {
+    const locks = fakeCollection({
+      findOneAndUpdate: vi.fn(async () => ({ value: { uniqueValue: 't' } })),
+    });
+    const increment = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }))
+      .mockResolvedValueOnce({ value: { _id: 'fence', value: 7 } })
+      .mockRejectedValueOnce(new Error('not primary'));
+    const fences = fakeCollection({ findOneAndUpdate: increment });
+    const client: MongoLikeClient = {
+      db: () => ({ collection: (name) => (name.endsWith('-fences') ? fences : locks) }),
+    };
+    const adapter = new MongoAdapter({ client });
+    await expect(adapter.acquireFenced({ key: 'k', token: 't', ttl: 1000 })).resolves.toBe(7);
+    expect(increment).toHaveBeenCalledTimes(2);
+    expect(increment).toHaveBeenCalledWith({ _id: 'fence' }, expect.any(Array), {
+      upsert: true,
+      returnDocument: 'after',
+      includeResultMetadata: true,
+    });
+    await expect(adapter.acquireFenced({ key: 'k', token: 't', ttl: 1000 })).rejects.toThrow(
+      'not primary',
+    );
+  });
+
+  it('keeps the fence counter out of the lock documents', async () => {
+    const client = await mongoClient();
+    const name = 'locco-locks-fence-shape';
+    try {
+      const adapter = new MongoAdapter({ client, collectionName: name });
+      const key = uniqueKey();
+      const fence = await adapter.acquireFenced({ key, token: 't', ttl: 60_000 });
+      const document = await client.db().collection(name).findOne({ key });
+      // The 1.x shape, untouched: a 1.x process on the same collection reads it as before.
+      expect(Object.keys(document ?? {}).sort()).toEqual(['_id', 'expireAt', 'key', 'uniqueValue']);
+      await expect(
+        client
+          .db()
+          .collection(`${name}-fences`)
+          .findOne({ _id: 'fence' as never }),
+      ).resolves.toMatchObject({ value: fence });
+    } finally {
+      for (const collection of [name, `${name}-fences`]) {
+        await client
+          .db()
+          .collection(collection)
+          .drop()
+          .catch(() => undefined);
+      }
+      await client.close();
+    }
   });
 
   it('writes the 1.x document shape and reads expiry on the server clock', async () => {

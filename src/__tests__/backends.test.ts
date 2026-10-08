@@ -65,4 +65,15 @@ describe.each(ALL_BACKENDS)('Locker over %s', (_name, make) => {
     }
     await expect(locks.release()).resolves.toBe(true);
   });
+
+  it('hands out larger fences to later holders of a key', async () => {
+    const fenced = new Locker({ adapter: backend.adapter, fencing: true, retry: { retries: 0 } });
+    const key = uniqueKey();
+    const first = await fenced.acquire(key, { ttl: 5000 });
+    await expect(fenced.tryAcquire(key, { ttl: 5000 })).resolves.toBeNull();
+    await first.release();
+    const second = await fenced.acquire(key, { ttl: 5000 });
+    expect(second.fence).toBeGreaterThan(first.fence as number);
+    await second.release();
+  });
 });

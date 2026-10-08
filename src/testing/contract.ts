@@ -187,5 +187,83 @@ export function runLockAdapterContract(
       await expect(adapter.acquire({ key: first, token: token(), ttl })).resolves.toBe(true);
       await expect(adapter.acquire({ key: second, token: token(), ttl })).resolves.toBe(true);
     });
+
+    describe('acquireFenced, for an adapter that has it', () => {
+      /** The method, or a skipped test for an adapter without fencing. */
+      const fenced = (context: { skip: () => void }) => {
+        const method = adapter.acquireFenced;
+        if (typeof method !== 'function') {
+          context.skip();
+          throw new Error('unreachable: skip() ends the test');
+        }
+        return (params: { key: string; token: string; ttl: number }) =>
+          method.call(adapter, params);
+      };
+
+      const expectFence = (fence: number | null): number => {
+        expect(Number.isSafeInteger(fence) && (fence as number) > 0).toBe(true);
+        return fence as number;
+      };
+
+      it('grants a free key with a positive integer token', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        const t = token();
+        expectFence(await acquire({ key: k, token: t, ttl }));
+        await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(true);
+      });
+
+      it('gives every later grant of a key a larger token', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        const first = token();
+        const afterRelease = token();
+        const one = expectFence(await acquire({ key: k, token: first, ttl }));
+        await adapter.release({ key: k, token: first });
+        const two = expectFence(await acquire({ key: k, token: afterRelease, ttl }));
+        expect(two).toBeGreaterThan(one);
+        await sleep(afterExpiry);
+        const three = expectFence(await acquire({ key: k, token: token(), ttl }));
+        expect(three).toBeGreaterThan(two);
+      });
+
+      it('answers null for a held key and keeps the holder', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        const t = token();
+        await adapter.acquire({ key: k, token: t, ttl });
+        await expect(acquire({ key: k, token: token(), ttl })).resolves.toBeNull();
+        await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(true);
+      });
+
+      it('holds a fenced key against a plain acquire', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        expectFence(await acquire({ key: k, token: token(), ttl }));
+        await expect(adapter.acquire({ key: k, token: token(), ttl })).resolves.toBe(false);
+      });
+
+      it('extends and releases a fenced lease like any other', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        const t = token();
+        expectFence(await acquire({ key: k, token: t, ttl }));
+        await expect(adapter.extend({ key: k, token: t, ttl: ttl * 3 })).resolves.toBe(true);
+        await expect(adapter.release({ key: k, token: t })).resolves.toBe(true);
+        await expect(adapter.isHeld({ key: k, token: t })).resolves.toBe(false);
+      });
+
+      it('lets exactly one of many concurrent fenced acquires win', async (context) => {
+        const acquire = fenced(context);
+        const k = key();
+        const tokens = Array.from({ length: racers }, token);
+        const fences = await Promise.all(
+          tokens.map((t) => acquire({ key: k, token: t, ttl: raceTtl })),
+        );
+        const winners = tokens.filter((_, index) => fences[index] !== null);
+        expect(winners).toHaveLength(1);
+        await Promise.all(winners.map((t) => adapter.release({ key: k, token: t })));
+      });
+    });
   });
 }

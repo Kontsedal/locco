@@ -19,6 +19,7 @@ export class InMemoryAdapter implements LockAdapter, Disposable {
   readonly #entries = new Map<string, Entry>();
   readonly #timers = new Map<string, NodeJS.Timeout>();
   readonly #now: () => number;
+  #fence = 0;
 
   constructor(options: InMemoryAdapterOptions = {}) {
     this.#now = options.now ?? (() => performance.now());
@@ -30,6 +31,16 @@ export class InMemoryAdapter implements LockAdapter, Disposable {
     }
     this.#set(key, token, ttl);
     return true;
+  }
+
+  /** One counter for every key, so a token is larger than every token granted before it. */
+  async acquireFenced({ key, token, ttl }: LockLeaseParams): Promise<number | null> {
+    if (this.#live(key)) {
+      return null;
+    }
+    this.#set(key, token, ttl);
+    this.#fence += 1;
+    return this.#fence;
   }
 
   async release({ key, token }: LockKeyParams): Promise<boolean> {

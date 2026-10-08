@@ -1,10 +1,16 @@
 import type { LockAdapter, LockKeyParams, LockLeaseParams } from '../adapter';
 import {
+  ACQUIRE_FENCED_SCRIPT,
+  ACQUIRE_FENCED_SHA,
   EXTEND_SCRIPT,
   EXTEND_SHA,
+  fencedArguments,
+  fenceKeyFor,
   isNoScriptError,
   RELEASE_SCRIPT,
   RELEASE_SHA,
+  replicationCheck,
+  type WaitForReplicas,
 } from './redisScripts';
 
 type ScriptOptions = {
@@ -18,21 +24,45 @@ export type NodeRedisLikeClient = {
   get: (key: string) => Promise<unknown>;
   eval: (script: string, options: ScriptOptions) => Promise<unknown>;
   evalSha: (sha: string, options: ScriptOptions) => Promise<unknown>;
+  /** Needed only with `waitForReplicas`. */
+  wait?: (replicas: number, timeout: number) => Promise<unknown>;
 };
 
 export type NodeRedisAdapterOptions = {
   client: NodeRedisLikeClient;
+  /**
+   * Run `WAIT replicas timeout` after every acquire and extend, and throw RedisReplicationError
+   * when fewer replicas acknowledged the write. Default off. Needs a client with one connection
+   * of its own: `WAIT` blocks it for up to `timeout`.
+   */
+  waitForReplicas?: WaitForReplicas;
 };
 
 export class NodeRedisAdapter implements LockAdapter {
   readonly #client: NodeRedisLikeClient;
+  readonly #replicate: () => Promise<void>;
 
-  constructor({ client }: NodeRedisAdapterOptions) {
+  constructor({ client, waitForReplicas }: NodeRedisAdapterOptions) {
+    this.#replicate = replicationCheck(waitForReplicas, client);
     this.#client = client;
   }
 
   async acquire({ key, token, ttl }: LockLeaseParams): Promise<boolean> {
-    return (await this.#client.set(key, token, { PX: ttl, NX: true })) === 'OK';
+    const acquired = (await this.#client.set(key, token, { PX: ttl, NX: true })) === 'OK';
+    if (acquired) {
+      await this.#replicate();
+    }
+    return acquired;
+  }
+
+  async acquireFenced({ key, token, ttl }: LockLeaseParams): Promise<number | null> {
+    const options = { keys: [key, fenceKeyFor(key)], arguments: [token, ...fencedArguments(ttl)] };
+    const fence = Number(await this.#run(ACQUIRE_FENCED_SHA, ACQUIRE_FENCED_SCRIPT, options));
+    if (fence === 0) {
+      return null;
+    }
+    await this.#replicate();
+    return fence;
   }
 
   async release({ key, token }: LockKeyParams): Promise<boolean> {
@@ -43,7 +73,11 @@ export class NodeRedisAdapter implements LockAdapter {
 
   async extend({ key, token, ttl }: LockLeaseParams): Promise<boolean> {
     const options = { keys: [key], arguments: [token, String(ttl)] };
-    return (await this.#run(EXTEND_SHA, EXTEND_SCRIPT, options)) === 1;
+    const extended = (await this.#run(EXTEND_SHA, EXTEND_SCRIPT, options)) === 1;
+    if (extended) {
+      await this.#replicate();
+    }
+    return extended;
   }
 
   async isHeld({ key, token }: LockKeyParams): Promise<boolean> {

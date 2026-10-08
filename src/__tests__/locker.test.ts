@@ -1300,3 +1300,87 @@ describe('onEvent', () => {
     await expect(rejecting.acquire('k', { ttl: TTL })).resolves.toBeDefined();
   });
 });
+
+describe('fencing', () => {
+  it('validates the option against the adapter', () => {
+    const adapter = new InMemoryAdapter();
+    const plain: LockAdapter = {
+      acquire: (p) => adapter.acquire(p),
+      release: (p) => adapter.release(p),
+      extend: (p) => adapter.extend(p),
+      isHeld: (p) => adapter.isHeld(p),
+    };
+    expect(() => new Locker({ adapter, fencing: 'yes' as never })).toThrow(
+      /fencing must be a boolean/,
+    );
+    expect(() => new Locker({ adapter: plain, fencing: true })).toThrow(
+      /fencing needs an adapter with an acquireFenced method/,
+    );
+    // Off is the default, and an adapter without fencing is fine then.
+    expect(() => new Locker({ adapter: plain, fencing: false })).not.toThrow();
+  });
+
+  it('gives each grant of a key a larger fence', async () => {
+    const { locker } = setup({ fencing: true });
+    const first = await locker.acquire('k', { ttl: TTL });
+    await first.release();
+    const second = await locker.acquire('k', { ttl: TTL });
+    expect(first.fence).toEqual(expect.any(Number));
+    expect(second.fence).toBeGreaterThan(first.fence as number);
+    await second.release();
+    const fromWithLock = await locker.withLock('k', { ttl: TTL }, (lock) => lock.fence);
+    expect(fromWithLock).toBeGreaterThan(second.fence as number);
+  });
+
+  it('leaves the fence undefined when the option is off', async () => {
+    const { locker } = setup();
+    const lock = await locker.acquire('k', { ttl: TTL });
+    expect(lock.fence).toBeUndefined();
+  });
+
+  it('answers null from tryAcquire when another holder has the key', async () => {
+    const { locker } = setup({ fencing: true });
+    await locker.acquire('k', { ttl: TTL });
+    await expect(locker.tryAcquire('k', { ttl: TTL })).resolves.toBeNull();
+  });
+
+  it('counts the fence as part of the grant, so a late fence gives the key back', async () => {
+    const memory = new InMemoryAdapter({ now: () => Date.now() });
+    const adapter: LockAdapter = {
+      acquire: (p) => memory.acquire(p),
+      release: (p) => memory.release(p),
+      extend: (p) => memory.extend(p),
+      isHeld: (p) => memory.isHeld(p),
+      acquireFenced: async (p) => {
+        const fence = await memory.acquireFenced(p);
+        await wait(150);
+        return fence;
+      },
+    };
+    const locker = new Locker({ adapter, fencing: true, now: () => Date.now() });
+    const failure = locker.tryAcquire('k', { ttl: 100 }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(failure).resolves.toMatchObject({ code: 'LOCK_HELD', reason: 'late-acquire' });
+    await expect(memory.acquire({ key: 'k', token: 'other', ttl: TTL })).resolves.toBe(true);
+  });
+
+  it('gives the key back when the fenced acquire throws', async () => {
+    const memory = new InMemoryAdapter({ now: () => Date.now() });
+    const release = vi.fn((p: { key: string; token: string }) => memory.release(p));
+    const adapter: LockAdapter = {
+      acquire: (p) => memory.acquire(p),
+      release,
+      extend: (p) => memory.extend(p),
+      isHeld: (p) => memory.isHeld(p),
+      acquireFenced: async (p) => {
+        await memory.acquireFenced(p);
+        throw new Error('counter write failed');
+      },
+    };
+    const locker = new Locker({ adapter, fencing: true, now: () => Date.now() });
+    await expect(locker.tryAcquire('k', { ttl: TTL })).rejects.toThrow('counter write failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(release).toHaveBeenCalledWith({ key: 'k', token: expect.any(String) });
+    await expect(memory.acquire({ key: 'k', token: 'other', ttl: TTL })).resolves.toBe(true);
+  });
+});

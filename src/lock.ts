@@ -23,6 +23,8 @@ export type LockInit = {
   now: () => number;
   emit: (event: LockEvent) => void;
   heartbeat?: HeartbeatConfig;
+  /** The fencing token of the grant, when the locker takes them. */
+  fence?: number;
 };
 
 type ExtendRequest = {
@@ -61,6 +63,12 @@ export class Lock implements AsyncDisposable {
   readonly key: string;
   readonly token: string;
   readonly retry: ResolvedRetry;
+  /**
+   * The fencing token of this grant, or undefined when the locker's `fencing` option is off. A
+   * later grant of the key always gets a larger one, so a resource that remembers the largest
+   * token it has seen can refuse a write from a holder whose lease ended.
+   */
+  readonly fence: number | undefined;
 
   #ttl: number;
   #state: LockState = 'held';
@@ -93,6 +101,7 @@ export class Lock implements AsyncDisposable {
     this.key = init.key;
     this.token = init.token;
     this.retry = init.retry;
+    this.fence = init.fence;
     this.#ttl = init.ttl;
     this.#acquiredAt = init.acquiredAt;
     this.#leaseStartedAt = init.acquiredAt;

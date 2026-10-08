@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { LockAdapter } from './adapter';
+import type { LockAdapter, LockLeaseParams } from './adapter';
 import { createSystemClock } from './clock';
 import { LockHeldError, LockLostError, ValidationError } from './errors';
 import { abandonLock, type HeartbeatConfig, Lock, leaseValidity } from './lock';
@@ -42,6 +42,11 @@ export type LockerOptions = {
   now?: () => number;
   /** Token generator. Default 16 random bytes as hex. Tests replace it. */
   token?: () => string;
+  /**
+   * Take a fencing token with every acquisition, as `lock.fence`. Default false. Needs an adapter
+   * with `acquireFenced`; every built-in adapter has it.
+   */
+  fencing?: boolean;
 };
 
 type Normalized = {
@@ -77,6 +82,7 @@ export class Locker {
   readonly #onEvent: LockEventHandler | undefined;
   readonly #now: () => number;
   readonly #token: () => string;
+  readonly #fencing: boolean;
 
   constructor(options: LockerOptions) {
     if (typeof options !== 'object' || options === null) {
@@ -96,12 +102,19 @@ export class Locker {
     if (options.token !== undefined) {
       assertFunction(options.token, 'token');
     }
+    if (options.fencing !== undefined && typeof options.fencing !== 'boolean') {
+      throw new ValidationError('fencing must be a boolean');
+    }
+    if (options.fencing && typeof options.adapter.acquireFenced !== 'function') {
+      throw new ValidationError('fencing needs an adapter with an acquireFenced method');
+    }
     this.#adapter = options.adapter;
     this.#retry = options.retry;
     this.#keyPrefix = options.keyPrefix ?? '';
     this.#onEvent = options.onEvent;
     this.#now = options.now ?? createSystemClock();
     this.#token = options.token ?? defaultToken;
+    this.#fencing = options.fencing ?? false;
   }
 
   /** Acquires the key, retrying while another holder has it. Throws LockHeldError when the budget runs out. */
@@ -324,14 +337,14 @@ export class Locker {
     const { key, ttl } = prepared;
     const token = this.#token();
     const requestedAt = this.#now();
-    let acquired: boolean;
+    let fence: number | null | undefined;
     try {
-      acquired = await this.#adapter.acquire({ key, token, ttl });
+      fence = await this.#acquireOnce({ key, token, ttl });
     } catch (error) {
       this.#giveBack(key, token);
       throw error;
     }
-    if (!acquired) {
+    if (fence === null) {
       return { lock: null, reason: 'held' };
     }
     if (this.#now() - requestedAt >= leaseValidity(ttl)) {
@@ -354,9 +367,25 @@ export class Locker {
       now: this.#now,
       emit: (event) => this.#emit(event),
       heartbeat: prepared.heartbeat,
+      fence,
     });
     this.#emit({ type: 'acquired', key, ttl, waitedMs: this.#elapsed(startedAt), attempts });
     return { lock };
+  }
+
+  /**
+   * Answers null when another holder has the key. Otherwise the fence with `fencing` on, and
+   * undefined without it. The fence counts as part of the grant, so the late-answer rule covers it.
+   */
+  async #acquireOnce(params: LockLeaseParams): Promise<number | null | undefined> {
+    if (this.#fencing) {
+      // The constructor refused fencing on an adapter without the method.
+      return (this.#adapter.acquireFenced as NonNullable<LockAdapter['acquireFenced']>).call(
+        this.#adapter,
+        params,
+      );
+    }
+    return (await this.#adapter.acquire(params)) ? undefined : null;
   }
 
   /** Gives every lease of the set a fresh TTL. An earlier lease that already ran out fails the set. */

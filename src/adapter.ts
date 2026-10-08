@@ -18,4 +18,10 @@ export interface LockAdapter {
   release(params: LockKeyParams): Promise<boolean>;
   extend(params: LockLeaseParams): Promise<boolean>;
   isHeld(params: LockKeyParams): Promise<boolean>;
+  /**
+   * Optional. Acquires like `acquire` and also takes a fencing token: a positive integer that is
+   * larger for every later grant of the key. Answers the token, or null when another holder had
+   * the key. `Locker` calls it instead of `acquire` when its `fencing` option is on.
+   */
+  acquireFenced?(params: LockLeaseParams): Promise<number | null>;
 }

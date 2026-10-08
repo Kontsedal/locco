@@ -87,6 +87,7 @@ const LIVE_AND_OURS = (key: string, token: string): Filter => ({
  */
 export class MongoAdapter implements LockAdapter {
   readonly #collection: MongoLikeCollection;
+  readonly #fences: MongoLikeCollection;
   readonly #collectionName: string;
   readonly #createIndexes: boolean;
   #indexes: Promise<void> | undefined;
@@ -112,9 +113,12 @@ export class MongoAdapter implements LockAdapter {
     }
     // Every read goes to the primary. A secondary that lags can answer that a lock we were just
     // granted is not ours, and `isHeld` would then mark it lost.
-    this.#collection = client
-      .db(dbName)
-      .collection(collectionName, { readPreference: 'primary', writeConcern });
+    const db = client.db(dbName);
+    this.#collection = db.collection(collectionName, { readPreference: 'primary', writeConcern });
+    this.#fences = db.collection(`${collectionName}-fences`, {
+      readPreference: 'primary',
+      writeConcern,
+    });
     this.#collectionName = collectionName;
     this.#createIndexes = createIndexes;
   }
@@ -151,6 +155,37 @@ export class MongoAdapter implements LockAdapter {
     }
     const document = (result as { value?: { uniqueValue?: unknown } | null } | null)?.value;
     return document?.uniqueValue === token;
+  }
+
+  /**
+   * Acquires, then increments one counter document in `<collectionName>-fences`. MongoDB cannot
+   * write two documents in one atomic step without a transaction, so the order of the tokens rests
+   * on the lease: `Locker` uses the grant only if the counter's answer arrives before the lease
+   * could have ended, and the next holder can be granted only after that end, or after our
+   * release, so it always draws a larger value.
+   */
+  async acquireFenced(params: LockLeaseParams): Promise<number | null> {
+    if (!(await this.acquire(params))) {
+      return null;
+    }
+    const increment: Pipeline = [{ $set: { value: { $add: [{ $ifNull: ['$value', 0] }, 1] } } }];
+    const run = () =>
+      this.#fences.findOneAndUpdate({ _id: 'fence' }, increment, {
+        upsert: true,
+        returnDocument: 'after',
+        includeResultMetadata: true,
+      });
+    let result: unknown;
+    try {
+      result = await run();
+    } catch (error) {
+      // The first two increments can race on the insert of the counter document.
+      if (!hasCode(error, DUPLICATE_KEY)) {
+        throw error;
+      }
+      result = await run();
+    }
+    return Number((result as { value: { value: unknown } }).value.value);
   }
 
   async release({ key, token }: LockKeyParams): Promise<boolean> {
