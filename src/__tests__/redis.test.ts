@@ -307,8 +307,13 @@ describe('Redis adapters', () => {
       await expect(nodeClient.get(fenceKeyFor(key))).resolves.toBe(String(third));
     });
 
-    it('refuses waitForReplicas on a client pool', async () => {
-      const { createClientPool } = await import('redis');
+    it('refuses waitForReplicas on a client pool', async (context) => {
+      // `createClientPool` arrived in redis 5. On 4 there is no pool to refuse.
+      const { createClientPool } = (await import('redis')) as Partial<typeof import('redis')>;
+      if (typeof createClientPool !== 'function') {
+        context.skip();
+        return;
+      }
       const pool = createClientPool({ url: `redis://localhost:${TEST_CONFIG.REDIS_PORT}` });
       expect(
         () =>
