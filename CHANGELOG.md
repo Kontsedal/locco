@@ -6,6 +6,42 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-08
+
+### Added
+
+- Fencing tokens. `new Locker({ adapter, fencing: true })` takes a token with every acquisition,
+  as `lock.fence`: a positive integer that is larger for every later grant of the key. The stored
+  lock keys and documents are unchanged, so 1.x processes can still share the backend.
+  - Redis keeps one counter per lock key, in the hash slot of the key, written in the acquire
+    script. The token is at least the server time in microseconds, so it keeps growing after the
+    counter is lost. The counter expires a day after the last grant.
+  - Postgres draws from the sequence `<tableName>_fence` in the acquire statement.
+  - MongoDB increments one document in `<collectionName>-fences` right after the grant. The order
+    rests on the late-answer rule, as the lock does.
+- `LockAdapter.acquireFenced`, an optional method. An adapter without it works as before; only
+  `fencing: true` needs it. The contract suite tests it when an adapter has it.
+- `waitForReplicas: { replicas, timeout }` on both Redis adapters. After every acquire and
+  extend, the adapter runs `WAIT` and throws `RedisReplicationError` when too few replicas
+  acknowledged the write. It refuses a pool or a cluster client, where `WAIT` can run on another
+  connection than the write.
+
+### Changed
+
+- `PostgresAdapter` with `createTable: false` checks once that the table exists with a valid
+  primary key or unique index on `key`, and throws a `ValidationError` when it does not. A missing
+  table used to surface as the driver's `42P01` on the first acquire. The first fenced acquire
+  checks the fence sequence the same way.
+- `postgresLocksDdl()` also returns the `CREATE SEQUENCE` statement for fencing tokens, so it is
+  now two statements. Run it through the simple query protocol, or split it. With `createTable`
+  on, the adapter creates the sequence on first use.
+
+### Documentation
+
+- The README says that `lock.signal` can abort late after the machine sleeps, because timers do not
+  run during a sleep, and that reading `lock.state` finds the loss at once.
+- The README covers Redis Cluster: which keys can be fenced there, and `keyPrefix`.
+
 ## [2.0.0] - 2026-10-01
 
 Neither 2.0 beta was published, so this entry lists everything that changed since 1.1.0.
@@ -109,7 +145,8 @@ Neither 2.0 beta was published, so this entry lists everything that changed sinc
 
 First stable release with the Redis, MongoDB and in-memory adapters.
 
-[Unreleased]: https://github.com/Kontsedal/locco/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Kontsedal/locco/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Kontsedal/locco/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Kontsedal/locco/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/Kontsedal/locco/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Kontsedal/locco/releases/tag/v1.0.0
